@@ -343,14 +343,15 @@ const CONFIG = {
     function loadModules() {
         try {
             const req = webpackChunkdiscord_app.push([[Symbol()], {}, r => r]); webpackChunkdiscord_app.pop();
+            const find = (fn) => Object.values(req.c).find(m => { try { return fn(m?.exports); } catch { return false; } })?.exports;
             const found = {
-                StreamStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.exports?.Z,
-                RunStore: Object.values(req.c).find(x => x?.exports?.ZP?.getRunningGames)?.exports?.ZP,
-                QuestStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getQuest)?.exports?.Z,
-                ChanStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getAllThreadsForParent)?.exports?.Z,
-                GuildChanStore: Object.values(req.c).find(x => x?.exports?.ZP?.getSFWDefaultChannel)?.exports?.ZP,
-                Dispatcher: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.flushWaitQueue)?.exports?.Z,
-                API: Object.values(req.c).find(x => x?.exports?.tn?.get)?.exports?.tn
+                StreamStore: find(e => e?.A?.__proto__?.getStreamerActiveStreamMetadata || e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.A || find(e => e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.Z,
+                RunStore: find(e => e?.Ay?.getRunningGames || e?.ZP?.getRunningGames)?.Ay || find(e => e?.ZP?.getRunningGames)?.ZP,
+                QuestStore: find(e => e?.A?.__proto__?.getQuest || e?.Z?.__proto__?.getQuest)?.A || find(e => e?.Z?.__proto__?.getQuest)?.Z,
+                ChanStore: find(e => e?.A?.__proto__?.getAllThreadsForParent || e?.Z?.__proto__?.getAllThreadsForParent)?.A || find(e => e?.Z?.__proto__?.getAllThreadsForParent)?.Z,
+                GuildChanStore: find(e => e?.Ay?.getSFWDefaultChannel || e?.ZP?.getSFWDefaultChannel)?.Ay || find(e => e?.ZP?.getSFWDefaultChannel)?.ZP,
+                Dispatcher: find(e => e?.h?.__proto__?.flushWaitQueue || e?.Z?.__proto__?.flushWaitQueue)?.h || find(e => e?.Z?.__proto__?.flushWaitQueue)?.Z,
+                API: find(e => e?.Bo?.get || e?.tn?.get)?.Bo || find(e => e?.tn?.get)?.tn
             };
             if (!found.QuestStore || !found.API) throw "Core modules not found";
             Mods = found;
