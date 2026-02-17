@@ -1,21 +1,27 @@
 (async () => {
     "use strict";
 
-const CONFIG = {
+    const CONFIG = {
         NAME: "Orion",
-        VERSION: "v3.6 (Enterprise)", 
+        VERSION: "v3.7 (Enterprise)",
         THEME: "#5865F2",
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
         VIDEO_SPEED: 5,
-        FAKE_ACTIVITY: true,
-        GAME_CONCURRENCY: 4,
+        HIDE_ACTIVITY: false,
+        GAME_CONCURRENCY: 1, // Recommended value: 1, increase on your own risk
         REQUEST_DELAY: 1500,
-        REMOVE_DELAY: 2000
+        REMOVE_DELAY: 2000,
+        RUNNING: true,
+        MAX_TASK_TIME: 25 * 60 * 1000
     };
 
-    if (window.orionLock) return console.warn(`[${CONFIG.NAME}] Already running.`);
+    if (window.orionLock) {
+        const existingUI = document.getElementById('orion-ui');
+        if (existingUI) existingUI.style.display = 'flex';
+        return console.warn(`[${CONFIG.NAME}] Already running.`);
+    }
     window.orionLock = true;
 
     const ICONS = {
@@ -25,12 +31,13 @@ const CONFIG = {
         STREAM: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`,
         ACTIVITY: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14.5c-2.49 0-4.5-2.01-4.5-4.5S9.51 7.5 12 7.5s4.5 2.01 4.5 4.5-2.01 4.5-4.5 4.5zm0-5.5c-.55 0-1 .45-1 1s.45 1 1 1 1-.45 1-1-.45-1-1-1z"/></svg>`,
         CHECK: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`,
-        CLOCK: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`
+        CLOCK: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z"/><path d="M12.5 7H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+        STOP: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>`
     };
 
     const Storage = {
-        save(key, value) { try { window.localStorage.setItem(`orion_${key}`, JSON.stringify(value)); } catch(e){} },
-        load(key) { try { const v = window.localStorage.getItem(`orion_${key}`); return v ? JSON.parse(v) : null; } catch(e){ return null; } }
+        save(key, value) { try { window.localStorage.setItem(`orion_${key}`, JSON.stringify(value)); } catch (e) { } },
+        load(key) { try { const v = window.localStorage.getItem(`orion_${key}`); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
     };
 
     const Logger = {
@@ -38,7 +45,7 @@ const CONFIG = {
         init() {
             const old = document.getElementById('orion-ui'); if (old) old.remove();
             const savedPos = Storage.load('pos') || { top: '20px', left: 'auto', right: '20px' };
-            
+
             const style = document.createElement('style');
             style.innerHTML = `
                 @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
@@ -54,6 +61,11 @@ const CONFIG = {
                 #orion-head:active { cursor: grabbing; background: #232428; }
                 #orion-title { font-weight: 800; font-size: 14px; color: #fff; display: flex; align-items: center; gap: 8px; letter-spacing: 0.5px; }
                 #orion-title svg { color: ${CONFIG.THEME}; }
+                #orion-controls { display: flex; gap: 10px; align-items: center; }
+                .ctrl-btn { cursor: pointer; opacity: 0.7; transition: 0.2s; display: flex; align-items: center; }
+                .ctrl-btn:hover { opacity: 1; }
+                .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px; border-radius: 4px; }
+                .ctrl-stop:hover { background: rgba(240, 71, 71, 0.1); }
                 #orion-body { padding: 12px; max-height: 400px; overflow-y: auto; flex-grow: 1; }
                 ::-webkit-scrollbar { width: 8px; height: 8px; }
                 ::-webkit-scrollbar-track { background: #2b2d31; }
@@ -89,19 +101,23 @@ const CONFIG = {
             this.root.id = 'orion-ui';
             this.root.innerHTML = `
                 <div id="orion-head">
-                    <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME} <span style="opacity:0.5; font-size:10px; margin-left:5px">${CONFIG.VERSION}</span></span>
-                    <span style="font-size:10px; color:#949ba4; cursor:pointer" id="orion-close">SHIFT + .</span>
+                    <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME} <span style="opacity:0.5; font-size:10px; margin:2px 0 0 5px;">${CONFIG.VERSION}</span></span>
+                    <div id="orion-controls">
+                        <span class="ctrl-btn ctrl-stop" id="orion-stop" title="Stop script & cleanup">${ICONS.STOP} STOP</span>
+                        <span class="ctrl-btn" style="font-size:10px; color:#949ba4;" id="orion-close" title="Shift + .">HIDE</span>
+                    </div>
                 </div>
                 <div id="orion-body"><div style="text-align:center; padding:30px; color:#949ba4; font-size:12px">Initializing System...</div></div>
                 <div id="orion-logs"></div>
                 <div id="orion-footer">Developed by: <a href="https://discord.com/users/1419678867005767783" target="_blank" class="dev-btn">syntt_</a></div>
             `;
             document.body.appendChild(this.root);
-            
+
             const head = document.getElementById('orion-head');
             let isDragging = false, startX, startY, initialLeft, initialTop;
-            
+
             head.onmousedown = e => {
+                if (e.target.closest('.ctrl-btn')) return;
                 isDragging = true;
                 startX = e.clientX; startY = e.clientY;
                 const rect = this.root.getBoundingClientRect();
@@ -109,7 +125,7 @@ const CONFIG = {
                 this.root.style.right = 'auto';
                 e.preventDefault();
             };
-            
+
             document.onmousemove = e => {
                 if (!isDragging) return;
                 const dx = e.clientX - startX;
@@ -117,20 +133,31 @@ const CONFIG = {
                 this.root.style.left = `${initialLeft + dx}px`;
                 this.root.style.top = `${initialTop + dy}px`;
             };
-            
+
             document.onmouseup = () => {
-                if(isDragging) {
+                if (isDragging) {
                     isDragging = false;
                     Storage.save('pos', { top: this.root.style.top, left: this.root.style.left, right: 'auto' });
                 }
             };
 
             document.getElementById('orion-close').onclick = () => this.toggle();
+            document.getElementById('orion-stop').onclick = () => this.shutdown();
             document.addEventListener('keydown', e => (e.key === '>' || (e.shiftKey && e.key === '.')) && this.toggle());
-            
-            try { if (Notification.permission === "default") Notification.requestPermission(); } catch(e){}
+
+            try { if (Notification.permission === "default") Notification.requestPermission(); } catch (e) { }
         },
         toggle() { this.root.style.display = this.root.style.display === 'none' ? 'flex' : 'none'; },
+        shutdown() {
+            if (!CONFIG.RUNNING) return;
+            CONFIG.RUNNING = false;
+            this.log("Stopping script...", "warn");
+            Patcher.clean();
+            setTimeout(() => {
+                this.root.remove();
+                window.orionLock = false;
+            }, 1000);
+        },
         updateTask(id, data) {
             const isPending = data.status === "PENDING" || data.status === "QUEUE";
             this.tasks.set(id, { ...data, done: data.status === "COMPLETED", pending: isPending });
@@ -140,17 +167,17 @@ const CONFIG = {
             if (this.tasks.has(id)) {
                 this.tasks.get(id).removing = true;
                 this.render();
-                setTimeout(() => { this.tasks.delete(id); this.render(); }, 500); 
+                setTimeout(() => { this.tasks.delete(id); this.render(); }, 500);
             }
         },
         log(msg, type = 'info') {
             const colors = { info: "#5865F2", success: "#3BA55C", warn: "#faa61a", err: "#f04747", debug: "#999" };
             console.log(`%c[ORION] %c${msg}`, `color: ${CONFIG.THEME}; font-weight: bold;`, `color: ${colors[type] || colors.info}`);
-            const box = document.getElementById('orion-logs'); 
+            const box = document.getElementById('orion-logs');
             if (box) {
                 const el = document.createElement('div'); el.className = `log-item c-${type}`;
                 el.innerHTML = `<span class="log-ts">${new Date().toLocaleTimeString().split(' ')[0]}</span> <span>${msg}</span>`;
-                box.appendChild(el); box.scrollTop = box.scrollHeight; 
+                box.appendChild(el); box.scrollTop = box.scrollHeight;
                 if (box.children.length > 60) box.firstChild.remove();
             }
         },
@@ -179,6 +206,7 @@ const CONFIG = {
     const Traffic = {
         queue: [], processing: false,
         async enqueue(url, body) {
+            if (!CONFIG.RUNNING) return Promise.reject("Stopped");
             return new Promise((resolve, reject) => {
                 this.queue.push({ url, body, resolve, reject });
                 this.process();
@@ -188,6 +216,7 @@ const CONFIG = {
             if (this.processing || this.queue.length === 0) return;
             this.processing = true;
             while (this.queue.length > 0) {
+                if (!CONFIG.RUNNING) { this.queue = []; this.processing = false; return; }
                 const req = this.queue.shift();
                 try {
                     const res = await Mods.API.post({ url: req.url, body: req.body });
@@ -195,7 +224,7 @@ const CONFIG = {
                 } catch (e) {
                     if (e.status === 429) {
                         const delay = (e.body?.retry_after || 5) * 1000;
-                        Logger.log(`Rate Limit! Pausing for ${(delay/1000).toFixed(1)}s`, 'warn');
+                        Logger.log(`Rate Limit! Pausing for ${(delay / 1000).toFixed(1)}s`, 'warn');
                         this.queue.unshift(req);
                         await sleep(delay + 1000);
                     } else { req.reject(e); }
@@ -225,84 +254,174 @@ const CONFIG = {
                 this.active = false;
             }
         },
-        add(g) { this.games.push(g); this.toggle(true); this.dispatch(g, []); if (CONFIG.FAKE_ACTIVITY) this.rpc(g); },
-        remove(g) { 
-            this.games = this.games.filter(x => x.pid !== g.pid); 
-            this.dispatch([], [g]); 
-            if (!this.games.length) { this.toggle(false); if (CONFIG.FAKE_ACTIVITY) this.rpc(null); }
-            else if (CONFIG.FAKE_ACTIVITY) this.rpc(this.games[0]);
+        add(g) {
+            this.games.push(g);
+            this.toggle(true);
+            this.dispatch(g, []);
+            this.rpc(g);
+        },
+        remove(g) {
+            this.games = this.games.filter(x => x.pid !== g.pid);
+            this.dispatch([], [g]);
+            if (!this.games.length) {
+                this.toggle(false);
+                this.rpc(null);
+            } else {
+                this.rpc(this.games[0]);
+            }
         },
         dispatch(added, removed) { Mods.Dispatcher.dispatch({ type: CONST.EVT.GAME, added: added ? [added] : [], removed: removed ? [removed] : [], games: Mods.RunStore.getRunningGames() }); },
-        rpc(g) { 
-            if (Mods.Dispatcher) Mods.Dispatcher.dispatch({ type: CONST.EVT.RPC, socketId: null, pid: 9999, activity: g ? { application_id: g.id, name: g.name, type: 0, details: "Orion Helper", state: "Completing Quests", timestamps: { start: g.start }, assets: { large_image: g.id } } : null });
+        rpc(g) {
+            if (CONFIG.HIDE_ACTIVITY && g) return;
+
+            if (Mods.Dispatcher) Mods.Dispatcher.dispatch({
+                type: CONST.EVT.RPC,
+                socketId: null,
+                pid: g ? g.pid : 9999,
+                activity: g ? {
+                    application_id: g.id,
+                    name: g.name,
+                    type: 0,
+                    details: null,
+                    state: null,
+                    timestamps: { start: g.start },
+                    icon: g.icon,
+                    assets: null
+                } : null
+            });
         },
-        clean() { 
-            this.games = []; this.toggle(false); 
-            if(this.rpc) this.rpc(null); 
+        clean() {
+            this.games = []; this.toggle(false);
+            if (this.rpc) this.rpc(null);
         }
     };
 
     const Tasks = {
+        sanitize(name) { return name.replace(/[^a-zA-Z0-9 ]/g, "").trim().replace(/\s+/g, " "); },
+
+        async fetchGameData(appId, appName) {
+            try {
+                const res = await Mods.API.get({ url: `/applications/public?application_ids=${appId}` });
+                const appData = res.body[0];
+                const exeEntry = appData?.executables?.find(x => x.os === "win32");
+                const rawExe = exeEntry ? exeEntry.name.replace(">", "") : `${this.sanitize(appName)}.exe`;
+                const cleanName = this.sanitize(appData?.name || appName);
+
+                return {
+                    name: appData?.name || appName,
+                    icon: appData?.icon,
+                    exeName: rawExe,
+                    cmdLine: `C:\\Program Files\\${cleanName}\\${rawExe}`,
+                    exePath: `c:/program files/${cleanName.toLowerCase()}/${rawExe}`,
+                    id: appId
+                };
+            } catch (e) {
+                const cleanName = this.sanitize(appName);
+                const safeExe = `${cleanName.replace(/\s+/g, "")}.exe`;
+                return {
+                    name: appName,
+                    exeName: safeExe,
+                    cmdLine: `C:\\Program Files\\${cleanName}\\${safeExe}`,
+                    exePath: `c:/program files/${cleanName.toLowerCase()}/${safeExe}`,
+                    id: appId
+                };
+            }
+        },
+
         async VIDEO(q, t, s) {
             let cur = s.progress?.[t.type]?.value ?? 0;
-            // Key Fix: Use q.id (Quest ID) for UI updates
             Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
-            
-            while (cur < t.target) {
+
+            const startTime = Date.now();
+
+            while (cur < t.target && CONFIG.RUNNING) {
                 cur = Math.min(t.target, cur + CONFIG.VIDEO_SPEED);
-                try { 
-                    const r = await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: cur }); 
-                    if (r.body.completed_at) break; 
-                } catch(e) {}
+
+                try {
+                    const r = await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: cur });
+                    if (r.body.completed_at) break;
+                } catch (e) { }
+
                 Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
+
+                if (Date.now() - startTime > CONFIG.MAX_TASK_TIME) {
+                    Logger.log(`[Timeout] Video ${t.name} stuck. Skipping.`, 'err');
+                    break;
+                }
+
+                await sleep(1000);
             }
-            Tasks.finish(q, t);
+            if (CONFIG.RUNNING) Tasks.finish(q, t);
         },
+
         GAME(q, t, s) { return Tasks.generic(q, t, "GAME", "PLAY_ON_DESKTOP", s); },
         STREAM(q, t, s) { return Tasks.generic(q, t, "STREAM", "STREAM_ON_DESKTOP", s); },
-        
-        generic(q, t, type, key, s) {
+
+        async generic(q, t, type, key, s) {
+            if (!CONFIG.RUNNING) return;
+            const gameData = await this.fetchGameData(t.appId, t.name);
+
             return new Promise(resolve => {
                 const pid = rnd(10000, 50000);
-                const game = { 
-                    // Key Fix: Fake Game uses Application ID (t.appId) to trick Discord
-                    id: t.appId, name: t.name, pid: pid, pidPath: [pid],
-                    start: Date.now(), processName: "game",
-                    exeName: "game.exe", exePath: "c:/program files/game/game.exe", 
-                    cmdLine: "C:\\Program Files\\Game\\game.exe",
-                    executables: [{ os: 'win32', name: 'game.exe', is_launcher: false }],
+                const game = {
+                    id: gameData.id,
+                    name: gameData.name,
+                    icon: gameData.icon,
+                    pid: pid,
+                    pidPath: [pid],
+                    processName: gameData.name,
+                    start: Date.now(),
+                    exeName: gameData.exeName,
+                    exePath: gameData.exePath,
+                    cmdLine: gameData.cmdLine,
+                    executables: [{ os: 'win32', name: gameData.exeName, is_launcher: false }],
                     windowHandle: 0, fullscreenType: 0, overlay: true, sandboxed: false,
                     hidden: false, isLauncher: false
                 };
-                
+
+                let cleanupHook;
+
                 if (type === "STREAM") {
                     const real = Mods.StreamStore.getStreamerActiveStreamMetadata;
-                    // Fix: Use t.appId for Stream ID too
-                    Mods.StreamStore.getStreamerActiveStreamMetadata = () => ({ id: t.appId, pid, sourceName: "Orion" });
-                    var cleanupHook = () => Mods.StreamStore.getStreamerActiveStreamMetadata = real;
+                    Mods.StreamStore.getStreamerActiveStreamMetadata = () => ({ id: gameData.id, pid, sourceName: gameData.name });
+                    cleanupHook = () => Mods.StreamStore.getStreamerActiveStreamMetadata = real;
                 } else {
                     Patcher.add(game);
-                    var cleanupHook = () => Patcher.remove(game);
+                    cleanupHook = () => Patcher.remove(game);
                 }
 
-                // Key Fix: Use q.id (Quest ID) for UI
                 Logger.updateTask(q.id, { name: t.name, type, cur: 0, max: t.target, status: "RUNNING" });
-                Logger.log(`[${type}] Starting process: ${t.name}`, 'debug');
+                Logger.log(`[${type}] Started: ${gameData.name}`, 'debug');
+
+                const safetyTimer = setTimeout(() => {
+                    if (CONFIG.RUNNING) Logger.log(`[Timeout] Task ${t.name} took too long (25m). Skipping.`, 'err');
+                    finish();
+                    resolve();
+                }, CONFIG.MAX_TASK_TIME);
 
                 const check = (d) => {
+                    if (!CONFIG.RUNNING) {
+                        clearTimeout(safetyTimer);
+                        finish();
+                        resolve();
+                        return;
+                    }
                     if (d.questId !== q.id) return;
+
                     const prog = d.userStatus.progress?.[key]?.value ?? d.userStatus.streamProgressSeconds ?? 0;
                     Logger.updateTask(q.id, { name: t.name, type, cur: prog, max: t.target, status: "RUNNING" });
+
                     if (prog >= t.target) {
+                        clearTimeout(safetyTimer);
                         finish();
                         Tasks.finish(q, t);
+                        resolve();
                     }
                 };
 
                 const finish = () => {
                     cleanupHook();
                     Mods.Dispatcher.unsubscribe(CONST.EVT.HEARTBEAT, check);
-                    resolve();
                 };
 
                 Mods.Dispatcher.subscribe(CONST.EVT.HEARTBEAT, check);
@@ -312,12 +431,14 @@ const CONFIG = {
         async ACTIVITY(q, t) {
             const chan = Mods.ChanStore.getSortedPrivateChannels()[0]?.id ?? Object.values(Mods.GuildChanStore.getAllGuilds()).find(g => g?.VOCAL?.length)?.VOCAL[0]?.channel?.id;
             if (!chan) return Logger.log(`No voice channel found for ${t.name}`, 'err');
-            
-            const key = `call:${chan}:${rnd(1000,9999)}`;
+
+            const key = `call:${chan}:${rnd(1000, 9999)}`;
             let cur = 0;
             Logger.updateTask(q.id, { name: t.name, type: "ACTIVITY", cur, max: t.target, status: "RUNNING" });
 
-            while (cur < t.target) {
+            const startTime = Date.now();
+
+            while (cur < t.target && CONFIG.RUNNING) {
                 try {
                     const r = await Traffic.enqueue(`/quests/${q.id}/heartbeat`, { stream_key: key, terminal: false });
                     cur = r.body.progress?.PLAY_ACTIVITY?.value ?? cur + 20;
@@ -326,16 +447,21 @@ const CONFIG = {
                         await Traffic.enqueue(`/quests/${q.id}/heartbeat`, { stream_key: key, terminal: true });
                         break;
                     }
-                } catch {}
+                } catch { }
+
+                if (Date.now() - startTime > CONFIG.MAX_TASK_TIME) {
+                    Logger.log(`[Timeout] Activity ${t.name} stuck.`, 'err');
+                    break;
+                }
                 await sleep(20000);
             }
-            Tasks.finish(q, t);
+            if (CONFIG.RUNNING && cur >= t.target) Tasks.finish(q, t);
         },
 
         finish(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
             Logger.log(`Completed: ${t.name}`, 'success');
-            try { if(Notification.permission === "granted") new Notification("Orion: Quest Completed", { body: t.name, icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp" }); } catch(e){}
+            try { if (Notification.permission === "granted") new Notification("Orion: Quest Completed", { body: t.name, icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp" }); } catch (e) { }
             setTimeout(() => Logger.removeTask(q.id), CONFIG.REMOVE_DELAY);
         }
     };
@@ -343,14 +469,15 @@ const CONFIG = {
     function loadModules() {
         try {
             const req = webpackChunkdiscord_app.push([[Symbol()], {}, r => r]); webpackChunkdiscord_app.pop();
+            const find = (fn) => Object.values(req.c).find(m => { try { return fn(m?.exports); } catch { return false; } })?.exports;
             const found = {
-                StreamStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.exports?.Z,
-                RunStore: Object.values(req.c).find(x => x?.exports?.ZP?.getRunningGames)?.exports?.ZP,
-                QuestStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getQuest)?.exports?.Z,
-                ChanStore: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.getAllThreadsForParent)?.exports?.Z,
-                GuildChanStore: Object.values(req.c).find(x => x?.exports?.ZP?.getSFWDefaultChannel)?.exports?.ZP,
-                Dispatcher: Object.values(req.c).find(x => x?.exports?.Z?.__proto__?.flushWaitQueue)?.exports?.Z,
-                API: Object.values(req.c).find(x => x?.exports?.tn?.get)?.exports?.tn
+                StreamStore: find(e => e?.A?.__proto__?.getStreamerActiveStreamMetadata || e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.A || find(e => e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.Z,
+                RunStore: find(e => e?.Ay?.getRunningGames || e?.ZP?.getRunningGames)?.Ay || find(e => e?.ZP?.getRunningGames)?.ZP,
+                QuestStore: find(e => e?.A?.__proto__?.getQuest || e?.Z?.__proto__?.getQuest)?.A || find(e => e?.Z?.__proto__?.getQuest)?.Z,
+                ChanStore: find(e => e?.A?.__proto__?.getAllThreadsForParent || e?.Z?.__proto__?.getAllThreadsForParent)?.A || find(e => e?.Z?.__proto__?.getAllThreadsForParent)?.Z,
+                GuildChanStore: find(e => e?.Ay?.getSFWDefaultChannel || e?.ZP?.getSFWDefaultChannel)?.Ay || find(e => e?.ZP?.getSFWDefaultChannel)?.ZP,
+                Dispatcher: find(e => e?.h?.__proto__?.flushWaitQueue || e?.Z?.__proto__?.flushWaitQueue)?.h || find(e => e?.Z?.__proto__?.flushWaitQueue)?.Z,
+                API: find(e => e?.Bo?.get || e?.tn?.get)?.Bo || find(e => e?.tn?.get)?.tn
             };
             if (!found.QuestStore || !found.API) throw "Core modules not found";
             Mods = found;
@@ -362,9 +489,10 @@ const CONFIG = {
     async function runConcurrent(tasks, limit) {
         const executing = [];
         for (const task of tasks) {
+            if (!CONFIG.RUNNING) break;
             const p = task().then(() => executing.splice(executing.indexOf(p), 1));
             executing.push(p);
-            await sleep(500); 
+            await sleep(500);
             if (executing.length >= limit) await Promise.race(executing);
         }
         return Promise.all(executing);
@@ -373,81 +501,92 @@ const CONFIG = {
     async function main() {
         Logger.init();
         if (!loadModules()) return Logger.log('Failed to load modules', 'err');
-        
+
         let loopCount = 1;
-        while(true) {
+        while (CONFIG.RUNNING) {
             Logger.log(`Starting Cycle #${loopCount}...`, 'info');
             const getQuests = () => (Mods.QuestStore.quests instanceof Map ? [...Mods.QuestStore.quests.values()] : Object.values(Mods.QuestStore.quests));
             let quests = getQuests();
-            
+
             const incomplete = quests.filter(q => !q.userStatus?.completedAt && new Date(q.config.expiresAt).getTime() > Date.now() && q.id !== CONST.ID);
             const toEnroll = incomplete.filter(q => !q.userStatus?.enrolledAt);
 
             if (toEnroll.length > 0) {
                 Logger.log(`Enrolling in ${toEnroll.length} new quests...`, 'warn');
-                for (const q of toEnroll) await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 1 });
-                await sleep(1500); quests = getQuests(); 
+                for (const q of toEnroll) {
+                    if (!CONFIG.RUNNING) break;
+                    await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 1 });
+                }
+                await sleep(1500); quests = getQuests();
             }
 
             const active = quests.filter(q => !q.userStatus?.completedAt && new Date(q.config.expiresAt).getTime() > Date.now() && q.id !== CONST.ID);
             if (!active.length) { Logger.log('All quests finished.', 'success'); break; }
 
-            Logger.log(`Processing ${active.length} quests.`, 'info');
-            const queue = { videos: [], complex: [] };
+            const queues = { video: [], game: [] };
 
             active.forEach(q => {
                 const cfg = q.config.taskConfig ?? q.config.taskConfigV2;
                 const taskKeys = Object.keys(cfg.tasks);
                 let type = null, target = 0, keyName = "";
 
-                if (taskKeys.some(k => k.includes("PLAY"))) { type = "GAME"; keyName = taskKeys.find(k => k.includes("PLAY")); } 
-                else if (taskKeys.some(k => k.includes("STREAM"))) { type = "STREAM"; keyName = taskKeys.find(k => k.includes("STREAM")); } 
-                else if (taskKeys.some(k => k.includes("VIDEO"))) { type = "WATCH_VIDEO"; keyName = taskKeys.find(k => k.includes("VIDEO")); } 
-                else if (taskKeys.some(k => k.includes("ACTIVITY"))) { type = "ACTIVITY"; keyName = taskKeys.find(k => k.includes("ACTIVITY")); } 
+                if (taskKeys.some(k => k.includes("PLAY"))) { type = "GAME"; keyName = taskKeys.find(k => k.includes("PLAY")); }
+                else if (taskKeys.some(k => k.includes("STREAM"))) { type = "STREAM"; keyName = taskKeys.find(k => k.includes("STREAM")); }
+                else if (taskKeys.some(k => k.includes("VIDEO"))) { type = "WATCH_VIDEO"; keyName = taskKeys.find(k => k.includes("VIDEO")); }
+                else if (taskKeys.some(k => k.includes("ACTIVITY"))) { type = "ACTIVITY"; keyName = taskKeys.find(k => k.includes("ACTIVITY")); }
                 else if (q.config.application.id) { type = "GAME"; keyName = "PLAY_ON_DESKTOP"; target = cfg.tasks[taskKeys[0]].target; }
 
                 if (keyName && !target) target = cfg.tasks[keyName].target;
                 if (!type) return Logger.log(`Unknown task type: ${q.config.messages.questName}`, 'warn');
 
-                // Pass BOTH ID Types:
-                // id: Quest ID (for UI uniqueness)
-                // appId: Application ID (for Fake Process)
-                const tInfo = { 
-                    id: q.id, 
-                    appId: q.config.application.id, 
-                    name: q.config.messages.questName, 
-                    target: target, 
-                    type: type 
+                const tInfo = {
+                    id: q.id,
+                    appId: q.config.application.id,
+                    name: q.config.messages.questName,
+                    target: target,
+                    type: type
                 };
-                
+
+                if (Logger.tasks.has(q.id) && Logger.tasks.get(q.id).status === "RUNNING") return;
+
                 Logger.updateTask(tInfo.id, { name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target, status: "QUEUE" });
 
-                if (type === "WATCH_VIDEO") queue.videos.push(Tasks.VIDEO(q, tInfo, q.userStatus));
-                else {
+                const taskFunc = () => {
+                    if (type === "WATCH_VIDEO") return Tasks.VIDEO(q, tInfo, q.userStatus);
                     const runner = type === "STREAM" ? Tasks.STREAM : (type === "ACTIVITY" ? Tasks.ACTIVITY : Tasks.GAME);
-                    queue.complex.push(() => runner(q, tInfo, q.userStatus));
-                }
+                    return runner(q, tInfo, q.userStatus);
+                };
+
+                if (type === "WATCH_VIDEO") queues.video.push(taskFunc);
+                else queues.game.push(taskFunc);
             });
 
-            if (queue.videos.length > 0) {
-                Logger.log(`Launching ${queue.videos.length} videos...`, 'info');
-                Promise.all(queue.videos);
-            }
+            const totalTasks = queues.video.length + queues.game.length;
 
-            if (queue.complex.length > 0) {
-                Logger.log(`Launching ${queue.complex.length} games (${CONFIG.GAME_CONCURRENCY} concurrent)...`, 'warn');
-                await runConcurrent(queue.complex, CONFIG.GAME_CONCURRENCY);
+            if (totalTasks > 0) {
+                Logger.log(`Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
+
+                const pGames = runConcurrent(queues.game, CONFIG.GAME_CONCURRENCY);
+
+                const pVideos = runConcurrent(queues.video, 2);
+
+                await Promise.all([pGames, pVideos]);
             } else {
-                await sleep(5000);
+                if (active.length === 0) { Logger.log('All quests finished.', 'success'); break; }
+                else await sleep(5000);
             }
 
+            if (!CONFIG.RUNNING) break;
             Logger.log(`Cycle #${loopCount} complete. Rescanning...`, 'success');
             await sleep(3000); loopCount++;
         }
-        
-        Logger.log('Orion finished. Closing in 5s...', 'success');
-        setTimeout(() => { Logger.root.remove(); window.orionLock = false; }, 5000);
+
+        Logger.shutdown();
     }
 
-    main().catch(e => Logger.log(e.message, 'err')).finally(() => Patcher.clean());
+    main().catch(e => {
+        console.error(e);
+        Logger.log(e.message || "Critical Error", 'err');
+        Logger.shutdown();
+    });
 })();
