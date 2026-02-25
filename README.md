@@ -3,7 +3,7 @@
 > **The ultimate automated tool for completing Discord Quests effortlessly.**
 > Featuring a hybrid execution engine, smart traffic control system, and a stunning, persistent in-app dashboard.
 
-![Version](https://img.shields.io/badge/version-3.6-blue.svg?style=flat-square)
+![Version](https://img.shields.io/badge/version-3.7-blue.svg?style=flat-square)
 ![Status](https://img.shields.io/badge/status-stable-success.svg?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green.svg?style=flat-square)
 
@@ -11,16 +11,17 @@
 
 ## 🚀 Key Features
 
-### 🛡️ Core Stability
+### 🛡️ Core Stability & Stealth
+* **Hybrid Execution Engine (v3.7):** Runs video tasks in parallel (up to 2x) for speed, while safely queuing game/stream tasks serially (1x) to mimic real human behavior and prevent detection.
+* **Dynamic Metadata Fetching:** Queries Discord's API to fetch the actual executable name, icon, and game ID. No more generic "game.exe" – the Rich Presence looks exactly like a native game launch.
+* **Anti-Hang Protocols:** Features a 25-minute safety timeout to prevent infinite loops (Zombie Promises) if Discord fails to send a progress heartbeat.
 * **Traffic Control System (Anti-429):** Intelligent request queuing prevents "Too Many Requests" API bans. It buffers actions with a safety delay to ensure 100% completion success without network errors.
-* **Hybrid Execution Engine:** Runs video tasks in parallel for speed, while safely queuing game/stream tasks serially to prevent detection and client crashes.
-* **Invisible Overlay Bypasser:** Simulates full game processes with spoofed metadata (window handle, fullscreen type) to trick Discord's internal detection.
 
 ### 💎 User Experience (UX)
+* **Global Kill Switch [STOP]:** A true shutdown button. Instantly halts the event loop, clears all game patches, and cancels pending network requests without leaving background processes.
 * **Draggable Dashboard:** The UI is no longer fixed. You can drag the panel anywhere on your screen.
 * **State Persistence:** Orion remembers exactly where you left the window. Close Discord, reopen it, run the script, and the panel reappears in the same spot.
-* **Native Notifications:** Receive desktop alerts instantly when a quest is completed, so you don't have to watch the screen.
-* **Auto-Enroll & Loop:** Automatically accepts new quests, fixes "Select Platform" glitches, and continuously loops until all rewards are claimed.
+* **Auto-Enroll & Loop:** Automatically accepts new quests and continuously loops until all rewards are claimed.
 
 ---
 
@@ -36,7 +37,7 @@ Download **[Discord Canary](https://canary.discord.com/download)**. The console 
 2.  Press `Win + R`, type `%appdata%/discord`, and press Enter.
 3.  Open `settings.json`.
 4.  Add this line inside the brackets:
-    "DANGEROUS_ENABLE_DEVTOOLS_ONLY_ENABLE_IF_YOU_KNOW_WHAT_YOURE_DOING": true
+    `"DANGEROUS_ENABLE_DEVTOOLS_ONLY_ENABLE_IF_YOU_KNOW_WHAT_YOURE_DOING": true`
 5.  Save and restart Discord.
 
 ---
@@ -56,10 +57,11 @@ You can tweak the internal settings at the top of the script code before pasting
 
 ```javascript
 const CONFIG = {
-    VIDEO_SPEED: 5,        // Seconds of progress per tick
-    GAME_CONCURRENCY: 4,   // Max simultaneous games
-    REQUEST_DELAY: 1500,   // Delay between API calls (Anti-429)
-    FAKE_ACTIVITY: true    // Show "Playing..." status to friends
+    VIDEO_SPEED: 5,               // Seconds of progress per tick
+    HIDE_ACTIVITY: false,         // Hide the "Playing..." status from friends
+    GAME_CONCURRENCY: 1,          // Recommended value: 1. Increase at your own risk
+    REQUEST_DELAY: 1500,          // Delay between API calls (Anti-429)
+    MAX_TASK_TIME: 25 * 60 * 1000 // 25-minute safety timeout
 };
 ```
 
