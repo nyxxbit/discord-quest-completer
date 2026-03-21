@@ -163,6 +163,8 @@
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
+                .claim-btn { padding: 4px 10px; background: ${CONFIG.SUCCESS}; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: 0.2s; text-transform: uppercase; letter-spacing: 0.5px; }
+                .claim-btn:hover { background: #43c66f; transform: scale(1.03); }
             `;
             document.head.appendChild(style);
 
@@ -230,7 +232,8 @@
 
         updateTask(id, data) {
             const isPending = data.status === "PENDING" || data.status === "QUEUE";
-            this.tasks.set(id, { ...data, done: data.status === "COMPLETED", pending: isPending });
+            const isDone = data.status === "COMPLETED" || data.status === "CLAIMED";
+            this.tasks.set(id, { ...data, done: isDone, pending: isPending });
             this.render();
         },
 
@@ -283,7 +286,9 @@
                 else if (t.type === 'ACHIEVEMENT') icon = ICONS.ACTIVITY;
                 else if (t.type?.includes('GAME')) icon = ICONS.GAME;
                 else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
-                body.innerHTML += `<div class="task-card ${t.done ? 'done' : ''} ${t.pending ? 'pending' : ''} ${t.removing ? 'removing' : ''}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${t.done ? 'DONE' : t.status}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : 'Progress'}</span><span>${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div></div></div>`;
+                const claimBtn = t.claimable ? `<button class="claim-btn" onclick="window.open('https://discord.com/quests','_blank')">CLAIM REWARD</button>` : '';
+                const statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
+                body.innerHTML += `<div class="task-card ${t.done ? 'done' : ''} ${t.pending ? 'pending' : ''} ${t.removing ? 'removing' : ''}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : 'Progress'}</span><span>${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${claimBtn}</div></div>`;
             });
         }
     };
@@ -408,21 +413,24 @@
 
         rpc(g) {
             if (CONFIG.HIDE_ACTIVITY && g) return;
-            Mods.Dispatcher?.dispatch({
-                type: CONST.EVT.RPC,
-                socketId: null,
-                pid: g ? g.pid : 9999,
-                activity: g ? {
-                    application_id: g.id,
-                    name: g.name,
-                    type: 0,
-                    details: null,
-                    state: null,
-                    timestamps: { start: g.start },
-                    icon: g.icon,
-                    assets: null
-                } : null
-            });
+            if (!g) return;  // clearing RPC with null causes locale dispatch errors
+            try {
+                Mods.Dispatcher?.dispatch({
+                    type: CONST.EVT.RPC,
+                    socketId: null,
+                    pid: g.pid,
+                    activity: {
+                        application_id: g.id,
+                        name: g.name,
+                        type: 0,
+                        details: null,
+                        state: null,
+                        timestamps: { start: g.start },
+                        icon: g.icon,
+                        assets: null
+                    }
+                });
+            } catch (e) { }
         },
 
         clean() {
@@ -499,19 +507,34 @@
             }
         },
 
+        // adaptive speed: fewer API calls for longer videos, conservative for short ones
+        _videoSpeed(target) {
+            if (target <= 100) return 5;
+            if (target <= 300) return 15;
+            if (target <= 600) return 25;
+            return 40;
+        },
+
         // sends fake video-progress timestamps until Discord marks the quest done
         async VIDEO(q, t, s) {
-            let cur = s.progress?.[t.type]?.value ?? 0;
+            // read progress from actual task key, fall back to type name
+            let cur = s.progress?.[t.keyName]?.value ?? s.progress?.[t.type]?.value ?? 0;
             let failCount = 0;
+            const speed = this._videoSpeed(t.target);
             Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
 
             const startTime = Date.now();
+            let calls = 0;
 
             while (cur < t.target && RUNTIME.running) {
-                cur = Math.min(t.target, cur + CONFIG.VIDEO_SPEED);
+                cur = Math.min(t.target, cur + speed);
 
                 try {
                     const r = await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: cur });
+                    calls++;
+                    // sync with server if it reports higher progress
+                    const serverVal = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.WATCH_VIDEO?.value;
+                    if (serverVal > cur) cur = Math.min(t.target, serverVal);
                     if (r?.body?.completed_at) break;
                     failCount = 0;
                 } catch (e) {
@@ -531,13 +554,16 @@
                 Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
 
                 if (Date.now() - startTime > CONFIG.MAX_TASK_TIME) {
-                    Logger.log(`[Timeout] Video ${t.name} stuck after ${((Date.now() - startTime) / 1000).toFixed(0)}s. Skipping.`, 'err');
+                    Logger.log(`[Timeout] Video ${t.name} stuck after ${((Date.now() - startTime) / 1000).toFixed(0)}s.`, 'err');
                     break;
                 }
 
                 await sleep(CONFIG.VIDEO_CHECK_INTERVAL);
             }
-            if (RUNTIME.running) Tasks.finish(q, t);
+            if (RUNTIME.running) {
+                Logger.log(`[VIDEO] ${t.name} done in ${calls} API calls`, 'debug');
+                Tasks.finish(q, t);
+            }
         },
 
         GAME(q, t, s) { return Tasks.generic(q, t, "GAME", "PLAY_ON_DESKTOP", s); },
@@ -673,7 +699,7 @@
             while (cur < t.target && RUNTIME.running) {
                 try {
                     const r = await Traffic.enqueue(`/quests/${q.id}/heartbeat`, { stream_key: key, terminal: false });
-                    cur = r?.body?.progress?.PLAY_ACTIVITY?.value ?? cur + 20;
+                    cur = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.PLAY_ACTIVITY?.value ?? cur + 20;
                     Logger.updateTask(q.id, { name: t.name, type: "ACTIVITY", cur, max: t.target, status: "RUNNING" });
                     failCount = 0;
                     if (cur >= t.target) {
@@ -704,9 +730,10 @@
             if (RUNTIME.running && cur >= t.target) Tasks.finish(q, t);
         },
 
-        finish(q, t) {
+        async finish(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
             Logger.log(`Completed: ${t.name}`, 'success');
+
             try {
                 if (typeof Notification !== 'undefined' && Notification.permission === "granted") {
                     new Notification("Orion: Quest Completed", {
@@ -716,15 +743,39 @@
                     });
                 }
             } catch (e) { Logger.log(`[Notification] ${e.message}`, 'debug'); }
-            setTimeout(() => Logger.removeTask(q.id), CONFIG.REMOVE_DELAY);
+
+            // optimistic claim — try without captcha, show button if challenged
+            try {
+                const claimRes = await Mods.API.post({
+                    url: `/quests/${q.id}/claim-reward`,
+                    body: { platform: 0, location: 11, is_targeted: false, metadata_raw: null, metadata_sealed: null, traffic_metadata_raw: null, traffic_metadata_sealed: null }
+                });
+                if (claimRes?.body?.claimed_at) {
+                    Logger.log(`[Claim] ${t.name} reward claimed automatically!`, 'success');
+                    Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
+                    setTimeout(() => Logger.removeTask(q.id), CONFIG.REMOVE_DELAY);
+                    return;
+                }
+            } catch (e) {
+                // captcha required or other error — fall through to claim button
+                const needsCaptcha = e?.body?.captcha_key || e?.body?.captcha_sitekey;
+                if (needsCaptcha) {
+                    Logger.log(`[Claim] ${t.name} needs captcha — use the CLAIM button`, 'warn');
+                } else {
+                    Logger.log(`[Claim] Auto-claim failed (${e?.status}): ${e?.body?.message ?? e?.message}`, 'debug');
+                }
+            }
+
+            // show claim button instead of auto-removing
+            Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED", claimable: true, questId: q.id });
         }
     };
 
     /* ── webpack module extraction ───────────────────────────────
-       Reaches into Discord's bundled webpack chunks to pull out
-       internal stores (QuestStore, RunStore, etc.) and the HTTP client.
-       Property paths (.A, .Z, .Ay, .ZP, .Bo, .tn) are minified names
-       that change on Discord updates — this is inherently fragile.
+       Uses getName() as a stable discriminator for Flux stores.
+       Real stores return their name (e.g. "QuestStore"), fakes
+       return "[object Object]". No hardcoded property paths needed.
+       Dispatcher and API use structural checks instead.
     ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── */
 
     function loadModules() {
@@ -734,16 +785,76 @@
             }
 
             const req = webpackChunkdiscord_app.push([[Symbol()], {}, r => r]); webpackChunkdiscord_app.pop();
-            const find = (fn) => Object.values(req.c).find(m => { try { return fn(m?.exports); } catch { return false; } })?.exports;
+            const modules = Object.values(req.c);
+
+            // real Flux stores have constructor.displayName set to their class name
+            // fakes have displayName "Object" — this check never triggers Proxy traps
+            function findStore(storeName) {
+                for (const m of modules) {
+                    try {
+                        const exp = m?.exports;
+                        if (!exp || typeof exp !== 'object') continue;
+                        for (const key of Object.keys(exp)) {
+                            const prop = exp[key];
+                            if (prop && typeof prop === 'object'
+                                && prop.__proto__?.constructor?.displayName === storeName) {
+                                return prop;
+                            }
+                        }
+                    } catch { }
+                }
+                return undefined;
+            }
+
+            // Dispatcher has _subscriptions + subscribe on proto, no valid getName
+            function findDispatcher() {
+                for (const m of modules) {
+                    try {
+                        const exp = m?.exports;
+                        if (!exp || typeof exp !== 'object') continue;
+                        for (const key of Object.keys(exp)) {
+                            const prop = exp[key];
+                            if (prop && prop._subscriptions
+                                && typeof prop.subscribe === 'function'
+                                && typeof prop.dispatch === 'function'
+                                && typeof prop.__proto__?.flushWaitQueue === 'function') {
+                                return prop;
+                            }
+                        }
+                    } catch { }
+                }
+                return undefined;
+            }
+
+            // Discord's API client has .del (not .delete) — this distinguishes it
+            // from generic HTTP wrappers. Also has get/post/put/patch as own props.
+            function findAPI() {
+                for (const m of modules) {
+                    try {
+                        const exp = m?.exports;
+                        if (!exp || typeof exp !== 'object') continue;
+                        for (const key of Object.keys(exp)) {
+                            const prop = exp[key];
+                            if (prop && typeof prop.get === 'function'
+                                && typeof prop.post === 'function'
+                                && typeof prop.del === 'function'
+                                && !prop._dispatcher) {
+                                return prop;
+                            }
+                        }
+                    } catch { }
+                }
+                return undefined;
+            }
 
             const found = {
-                StreamStore: find(e => e?.A?.__proto__?.getStreamerActiveStreamMetadata || e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.A || find(e => e?.Z?.__proto__?.getStreamerActiveStreamMetadata)?.Z,
-                RunStore: find(e => e?.Ay?.getRunningGames || e?.ZP?.getRunningGames)?.Ay || find(e => e?.ZP?.getRunningGames)?.ZP,
-                QuestStore: find(e => e?.A?.__proto__?.getQuest || e?.Z?.__proto__?.getQuest)?.A || find(e => e?.Z?.__proto__?.getQuest)?.Z,
-                ChanStore: find(e => e?.A?.__proto__?.getAllThreadsForParent || e?.Z?.__proto__?.getAllThreadsForParent)?.A || find(e => e?.Z?.__proto__?.getAllThreadsForParent)?.Z,
-                GuildChanStore: find(e => e?.Ay?.getSFWDefaultChannel || e?.ZP?.getSFWDefaultChannel)?.Ay || find(e => e?.ZP?.getSFWDefaultChannel)?.ZP,
-                Dispatcher: find(e => e?.h?.__proto__?.flushWaitQueue || e?.Z?.__proto__?.flushWaitQueue)?.h || find(e => e?.Z?.__proto__?.flushWaitQueue)?.Z,
-                API: find(e => e?.Bo?.get || e?.tn?.get)?.Bo || find(e => e?.tn?.get)?.tn
+                QuestStore:     findStore('QuestStore'),
+                RunStore:       findStore('RunningGameStore'),
+                StreamStore:    findStore('ApplicationStreamingStore'),
+                ChanStore:      findStore('ChannelStore'),
+                GuildChanStore: findStore('GuildChannelStore'),
+                Dispatcher:     findDispatcher(),
+                API:            findAPI()
             };
 
             const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
@@ -849,7 +960,7 @@
                             return;
                         }
 
-                        const { type, target } = typeData;
+                        const { type, keyName, target } = typeData;
                         if (target <= 0) {
                             Logger.log(`[Quest] Invalid target (${target}) for ${q.id}. Skipping.`, 'warn');
                             return;
@@ -860,7 +971,8 @@
                             appId: q.config?.application?.id ?? 0,
                             name: q.config?.messages?.questName ?? "Unknown Quest",
                             target,
-                            type
+                            type,
+                            keyName  // actual task key from config (e.g. WATCH_VIDEO_ON_MOBILE)
                         };
 
                         if (Logger.tasks.has(q.id) && Logger.tasks.get(q.id).status === "RUNNING") return;
