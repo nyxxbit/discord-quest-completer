@@ -158,6 +158,7 @@ Unlike other scripts that break on every Discord update, Orion finds stores by t
 - `WATCH_VIDEO_ON_MOBILE` progress tracking fix
 - Task sorting by progress percentage
 - Per-cycle try-catch for crash isolation
+- Fixed scroll (After activating the script, it turned blue when hovered)
 
 ### v4.0
 - Fixed Issue #5: enrollment 404 no longer crashes the script
