@@ -1,7 +1,4 @@
 <div align="center">
-
-<img src="https://cdn.discordapp.com/emojis/1120042457007792168.webp" width="80" />
-
 # Orion
 
 **Auto-complete every Discord Quest in seconds** &mdash; v4.1
