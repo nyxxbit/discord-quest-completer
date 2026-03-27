@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.0 (Enterprise)",
+        VERSION: "v4.1 (Enterprise)",
         THEME: "#5865F2",               // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -136,10 +136,10 @@
                 .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px; border-radius: 4px; }
                 .ctrl-stop:hover { background: rgba(240, 71, 71, 0.1); }
                 #orion-body { padding: 12px; max-height: 400px; overflow-y: auto; flex-grow: 1; }
-                ::-webkit-scrollbar { width: 8px; height: 8px; }
-                ::-webkit-scrollbar-track { background: #2b2d31; }
-                ::-webkit-scrollbar-thumb { background: #1e1f22; border-radius: 4px; }
-                ::-webkit-scrollbar-thumb:hover { background: #5865F2; }
+                #orion-ui ::-webkit-scrollbar { width: 4px; height: 4px; }
+                #orion-ui ::-webkit-scrollbar-track { background: #2b2d31; }
+                #orion-ui ::-webkit-scrollbar-thumb { background: #2b2d31; border-radius: 4px; }
+                #orion-ui ::-webkit-scrollbar-thumb:hover { background: #2b2d31; }
                 .task-card { display: flex; gap: 12px; padding: 10px; background: #1e1f22; border-radius: 6px; margin-bottom: 8px; border-left: 4px solid ${CONFIG.THEME}; transition: 0.3s; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
                 .task-card.done { border-left-color: ${CONFIG.SUCCESS}; background: rgba(59, 165, 92, 0.05); }
                 .task-card.pending { border-left-color: ${CONFIG.WARN}; opacity: 0.6; }
