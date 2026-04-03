@@ -1,37 +1,35 @@
 (async () => {
     "use strict";
 
-    /* ── config ─────────────────────────────────────────────────── */
+    /* ── config (Safe for users to edit) ────────────────────────── */
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.1 (Enterprise)",
-        THEME: "#5865F2",               // discord blurple
+        VERSION: "v4.2 (Enterprise)",
+        THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
-        VIDEO_SPEED: 5,                 // seconds of fake progress per tick
+        TRY_TO_CLAIM_REWARD: false,     // disable auto-claim to avoid captcha popups
         HIDE_ACTIVITY: false,           // suppress RPC status from friends list
-        GAME_CONCURRENCY: 1,            // >1 risks detection, keep at 1
-        REQUEST_DELAY: 1500,            // ms between queued API calls
-        REMOVE_DELAY: 2000,             // ms before clearing finished task from UI
-        MAX_TASK_TIME: 25 * 60 * 1000,  // hard abort per task (25 min)
-        VIDEO_CONCURRENCY: 2,
-        ACTIVITY_HEARTBEAT_INTERVAL: 20000,
-        VIDEO_CHECK_INTERVAL: 1000,
-        ENROLL_REFETCH_DELAY: 1500,
-        CYCLE_IDLE_WAIT: 5000,
-        CYCLE_RESCAN_DELAY: 3000,
-        TASK_STAGGER_DELAY: 500,
-        PID_MIN: 10000,                 // fake PID range — must look realistic to Discord
-        PID_MAX: 50000,
-        MAX_LOG_ITEMS: 60,
-        MAX_TASK_FAILURES: 5,           // consecutive failures before abandoning a task
-        MAX_RETRIES: 3                  // retries for transient (5xx) errors
+        GAME_CONCURRENCY: 1,            // >1 risks detection and ban, keep at 1
+        VIDEO_CONCURRENCY: 2,           // parallel video tasks
+        MAX_LOG_ITEMS: 60               // UI log limit
     };
 
+    /* ── internal system limits (DO NOT EDIT) ─────────────────── */
+
+    const SYS = Object.freeze({
+        MAX_TIME: 25 * 60 * 1000,       // hard abort per task (25 min)
+        MAX_TASK_FAILURES: 5,           // consecutive network failures
+        MAX_RETRIES: 3                  // 429/5xx transient error retries
+    });
+
     // mutable runtime state lives here, CONFIG stays read-only
-    const RUNTIME = { running: true };
+    const RUNTIME = { 
+        running: true,
+        cleanups: new Set()             // tracks active event listeners for safe shutdown
+    };
 
     const ICONS = Object.freeze({
         BOLT: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.29-.62L14.5 3h1l-1 7h3.5c.58 0 .57.32.29.62L11 21z"/></svg>`,
@@ -112,10 +110,13 @@
         root: null, tasks: new Map(),
 
         init() {
-            const old = document.getElementById('orion-ui'); if (old) old.remove();
-            const savedPos = Storage.load('pos') ?? { top: '20px', left: 'auto', right: '20px' };
+            const oldUI = document.getElementById('orion-ui'); if (oldUI) oldUI.remove();
+            const oldStyle = document.getElementById('orion-styles'); if (oldStyle) oldStyle.remove();
+            
+            const savedPos = Storage.load('pos') ?? { top: '32px', left: 'auto', right: '20px' };
 
             const style = document.createElement('style');
+            style.id = 'orion-styles';
             style.innerHTML = `
                 @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
                 @keyframes fadeOut { from { opacity: 1; height: 70px; } to { opacity: 0; height: 0; margin: 0; padding: 0; } }
@@ -133,19 +134,21 @@
                 #orion-controls { display: flex; gap: 10px; align-items: center; }
                 .ctrl-btn { cursor: pointer; opacity: 0.7; transition: 0.2s; display: flex; align-items: center; }
                 .ctrl-btn:hover { opacity: 1; }
-                .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px; border-radius: 4px; }
+                .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px 2px 2px; border-radius: 4px; }
                 .ctrl-stop:hover { background: rgba(240, 71, 71, 0.1); }
-                #orion-body { padding: 12px; max-height: 400px; overflow-y: auto; flex-grow: 1; }
+                #orion-body { padding: 12px 8px 12px 12px; max-height: 400px; overflow-y: auto; flex-grow: 1; scrollbar-gutter: stable; }
                 #orion-ui ::-webkit-scrollbar { width: 4px; height: 4px; }
-                #orion-ui ::-webkit-scrollbar-track { background: #2b2d31; }
-                #orion-ui ::-webkit-scrollbar-thumb { background: #2b2d31; border-radius: 4px; }
+                #orion-ui ::-webkit-scrollbar-track { background: none; }
+                #orion-ui ::-webkit-scrollbar-thumb { background: #5e5f69; border-radius: 4px; }
                 #orion-ui ::-webkit-scrollbar-thumb:hover { background: #2b2d31; }
                 .task-card { display: flex; gap: 12px; padding: 10px; background: #1e1f22; border-radius: 6px; margin-bottom: 8px; border-left: 4px solid ${CONFIG.THEME}; transition: 0.3s; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
                 .task-card.done { border-left-color: ${CONFIG.SUCCESS}; background: rgba(59, 165, 92, 0.05); }
+                .task-card.failed { border-left-color: ${CONFIG.ERR}; opacity: 0.8; }
                 .task-card.pending { border-left-color: ${CONFIG.WARN}; opacity: 0.6; }
                 .task-card.removing { animation: fadeOut 0.5s forwards; }
                 .task-icon { min-width: 36px; height: 36px; background: rgba(88,101,242,0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: ${CONFIG.THEME}; }
                 .task-card.done .task-icon { background: rgba(59,165,92,0.2); color: ${CONFIG.SUCCESS}; }
+                .task-card.failed .task-icon { background: rgba(240,71,71,0.1); color: ${CONFIG.ERR}; }
                 .task-card.pending .task-icon { background: rgba(250, 166, 26, 0.1); color: ${CONFIG.WARN}; }
                 .task-info { flex: 1; overflow: hidden; }
                 .task-top { display: flex; justify-content: space-between; margin-bottom: 4px; }
@@ -155,16 +158,19 @@
                 .progress-track { height: 6px; background: #2b2d31; border-radius: 3px; overflow: hidden; }
                 .progress-fill { height: 100%; background: linear-gradient(90deg, ${CONFIG.THEME}, #a358f2); width: 0%; transition: width 0.3s; background-image: linear-gradient(45deg,rgba(255,255,255,.1) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.1) 50%,rgba(255,255,255,.1) 75%,transparent 75%,transparent); background-size: 20px 20px; animation: stripe 1s linear infinite; }
                 .task-card.done .progress-fill { background: ${CONFIG.SUCCESS}; animation: none; }
+                .task-card.failed .progress-fill { background: ${CONFIG.ERR}; width: 100% !important; animation: none; opacity: 0.3; }
                 .task-card.pending .progress-fill { width: 0% !important; animation: none; }
                 #orion-logs { padding: 10px 12px; background: #0e0f10; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; color: #949ba4; height: 140px; overflow-y: auto; border-top: 1px solid #2b2d31; scroll-behavior: smooth; }
                 .log-item { margin-bottom: 4px; display: flex; gap: 8px; line-height: 1.4; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 2px; }
+                .log-item:last-of-type { border: none; }
                 .log-ts { opacity: 0.4; min-width: 50px; font-size: 10px; }
                 .c-info { color: ${CONFIG.THEME}; } .c-success { color: ${CONFIG.SUCCESS}; } .c-err { color: #f23f43; } .c-warn { color: #faa61a; } .c-debug { color: #555; }
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
-                .claim-btn { padding: 4px 10px; background: ${CONFIG.SUCCESS}; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: 0.2s; text-transform: uppercase; letter-spacing: 0.5px; }
-                .claim-btn:hover { background: #43c66f; transform: scale(1.03); }
+                .claim-btn { padding: 4px 10px; background: ${CONFIG.SUCCESS}; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: all 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
+                .claim-btn:hover { background: #43c66f; box-shadow: 0 0 8px rgba(67, 198, 111, 0.5); }
+                .claim-btn:active { background: #3ba55c; box-shadow: 0 0 4px rgba(67, 198, 111, 0.3); }
             `;
             document.head.appendChild(style);
 
@@ -193,6 +199,8 @@
                 startX = e.clientX; startY = e.clientY;
                 const rect = this.root.getBoundingClientRect();
                 initialLeft = rect.left; initialTop = rect.top;
+                this.root.style.left = `${initialLeft}px`;
+                this.root.style.top = `${initialTop}px`;
                 this.root.style.right = 'auto';
                 e.preventDefault();
             };
@@ -210,6 +218,36 @@
                 }
             };
 
+            document.getElementById('orion-body').addEventListener('click', async (e) => {
+                if (e.target.classList.contains('claim-btn')) {
+                    const btn = e.target;
+                    const questId = btn.getAttribute('data-id');
+                    const taskData = this.tasks.get(questId);
+                    
+                    btn.innerText = "WAITING...";
+                    btn.style.opacity = "0.5";
+                    btn.style.pointerEvents = "none";
+                    
+                    try {
+                        const claimRes = await Tasks.claimReward(questId);
+                        
+                        if (claimRes?.body?.claimed_at) {
+                            btn.innerText = "CLAIMED!";
+                            btn.style.background = CONFIG.SUCCESS;
+                            this.log(`[Claim] ${taskData?.name || 'Reward'} claimed successfully!`, 'success');
+                            
+                            this.updateTask(questId, { ...taskData, status: "CLAIMED", claimable: false });
+                            setTimeout(() => this.removeTask(questId), 2000);
+                        }
+                    } catch (err) {
+                        btn.innerText = "CLAIM REWARD";
+                        btn.style.opacity = "1";
+                        btn.style.pointerEvents = "auto";
+                        this.log(`[Claim] Action required for ${taskData?.name || 'quest'}. Check Discord UI for captcha.`, 'warn');
+                    }
+                }
+            });
+
             document.getElementById('orion-close').onclick = () => this.toggle();
             document.getElementById('orion-stop').onclick = () => this.shutdown();
             document.addEventListener('keydown', e => (e.key === '>' || (e.shiftKey && e.key === '.')) && this.toggle());
@@ -222,7 +260,14 @@
         shutdown() {
             if (!RUNTIME.running) return;
             RUNTIME.running = false;
-            this.log("Stopping script...", "warn");
+            this.log("Stopping script & cleaning up...", "warn");
+
+            // safely force-execute all registered task cleanups (unsubscribes/unpatches)
+            for (const cleanupFn of RUNTIME.cleanups) {
+                try { cleanupFn(); } catch (e) {}
+            }
+            RUNTIME.cleanups.clear();
+
             Patcher.clean();
             setTimeout(() => {
                 if (this.root?.parentElement) this.root.remove();
@@ -231,9 +276,30 @@
         },
 
         updateTask(id, data) {
+            const oldData = this.tasks.get(id);
             const isPending = data.status === "PENDING" || data.status === "QUEUE";
             const isDone = data.status === "COMPLETED" || data.status === "CLAIMED";
-            this.tasks.set(id, { ...data, done: isDone, pending: isPending });
+            const isFailed = data.status === "FAILED";
+            
+            const newData = { ...oldData, ...data, done: isDone, pending: isPending, failed: isFailed };
+            this.tasks.set(id, newData);
+
+            // Smart DOM update
+            if (oldData && oldData.status === newData.status && oldData.removing === newData.removing && oldData.claimable === newData.claimable) {
+                const card = document.getElementById(`orion-task-${id}`);
+                if (card) {
+                    const pct = newData.pending || newData.failed ? 0 : Math.min(100, (newData.cur / newData.max) * 100).toFixed(1);
+                    
+                    const fill = card.querySelector('.progress-fill');
+                    if (fill) fill.style.width = `${pct}%`;
+                    
+                    const progressText = card.querySelector('.progress-text');
+                    if (progressText) progressText.innerText = `${Math.floor(newData.cur)} / ${newData.max}s`;
+                    
+                    return;
+                }
+            }
+            
             this.render();
         },
 
@@ -263,11 +329,11 @@
             const body = document.getElementById('orion-body');
             if (!body) return;
             if (!this.tasks.size) return body.innerHTML = `<div style="text-align:center; padding:30px; color:#949ba4; font-size:12px">Waiting for tasks...</div>`;
-            body.innerHTML = '';
-            // sort: running (by progress %) → queued → completed
-            const sorted = [...this.tasks.entries()].sort((a, b) => {
+            
+            const sorted =[...this.tasks.entries()].sort((a, b) => {
                 const ta = a[1], tb = b[1];
                 if (ta.done !== tb.done) return ta.done ? 1 : -1;
+                if (ta.failed !== tb.failed) return ta.failed ? 1 : -1;
                 if (ta.pending !== tb.pending) return ta.pending ? 1 : -1;
                 // among active tasks, highest progress first
                 if (!ta.done && !ta.pending && !tb.done && !tb.pending) {
@@ -277,19 +343,26 @@
                 }
                 return 0;
             });
-            sorted.forEach(([id, t]) => {
-                const pct = t.pending ? 0 : Math.min(100, (t.cur / t.max) * 100).toFixed(1);
+
+            // Rebuild HTML in a single pass to prevent DOM flickering
+            body.innerHTML = sorted.map(([id, t]) => {
+                const pct = t.pending || t.failed ? 0 : Math.min(100, (t.cur / t.max) * 100).toFixed(1);
                 let icon = ICONS.BOLT;
                 if (t.done) icon = ICONS.CHECK;
+                else if (t.failed) icon = ICONS.STOP;
                 else if (t.pending) icon = ICONS.CLOCK;
                 else if (t.type === 'VIDEO') icon = ICONS.VIDEO;
                 else if (t.type === 'ACHIEVEMENT') icon = ICONS.ACTIVITY;
                 else if (t.type?.includes('GAME')) icon = ICONS.GAME;
                 else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
-                const claimBtn = t.claimable ? `<button class="claim-btn" onclick="window.open('https://discord.com/quests','_blank')">CLAIM REWARD</button>` : '';
+                
+                const claimBtn = t.claimable ? `<button class="claim-btn" data-id="${t.questId}">CLAIM REWARD</button>` : '';
                 const statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
-                body.innerHTML += `<div class="task-card ${t.done ? 'done' : ''} ${t.pending ? 'pending' : ''} ${t.removing ? 'removing' : ''}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : 'Progress'}</span><span>${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${claimBtn}</div></div>`;
-            });
+                const stateClass = t.done ? 'done' : t.failed ? 'failed' : t.pending ? 'pending' : '';
+                const removingClass = t.removing ? 'removing' : '';
+                
+                return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress'}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${claimBtn}</div></div>`;
+            }).join('');
         }
     };
 
@@ -329,12 +402,26 @@
                 } catch (e) {
                     const err = ErrorHandler.classify(e);
 
-                    if (err.isRetryable && req.attempts < CONFIG.MAX_RETRIES) {
+                    if (err.isRetryable && req.attempts < SYS.MAX_RETRIES) {
                         req.attempts++;
                         const delay = (e.body?.retry_after ?? Math.pow(2, req.attempts)) * 1000;
-                        Logger.log(`[${err.status}] Retry ${req.attempts}/${CONFIG.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s`, 'warn');
-                        this.queue.unshift(req);
-                        await sleep(delay + 500);
+                        const isGlobal = e.body?.global === true;
+                        
+                        Logger.log(`[${err.status}] Retry ${req.attempts}/${SYS.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s`, 'warn');
+                        
+                        if (isGlobal) {
+                            // Freeze queue on global rate limits to prevent API abuse
+                            this.queue.unshift(req);
+                            await sleep(delay + 500);
+                        } else {
+                            // Non-blocking retry for endpoint-specific limits
+                            setTimeout(() => {
+                                if (RUNTIME.running) {
+                                    this.queue.push(req);
+                                    this.process();
+                                }
+                            }, delay + 500);
+                        }
                     } else if (err.isClientError) {
                         Logger.log(`[${err.status}] ${err.message}: ${req.url}`, 'debug');
                         req.reject(e);
@@ -343,7 +430,8 @@
                         req.reject(e);
                     }
                 }
-                await sleep(CONFIG.REQUEST_DELAY);
+                
+                await sleep(1500); // delay between API calls
             }
             this.processing = false;
         }
@@ -413,13 +501,13 @@
 
         rpc(g) {
             if (CONFIG.HIDE_ACTIVITY && g) return;
-            if (!g) return;  // clearing RPC with null causes locale dispatch errors
             try {
                 Mods.Dispatcher?.dispatch({
                     type: CONST.EVT.RPC,
                     socketId: null,
-                    pid: g.pid,
-                    activity: {
+                    // use a fake PID (9999) and null activity to clear the playing status
+                    pid: g ? g.pid : 9999,
+                    activity: g ? {
                         application_id: g.id,
                         name: g.name,
                         type: 0,
@@ -428,9 +516,11 @@
                         timestamps: { start: g.start },
                         icon: g.icon,
                         assets: null
-                    }
+                    } : null
                 });
-            } catch (e) { }
+            } catch (e) { 
+                Logger.log(`[RPC Cleanup] ${e.message}`, 'debug'); 
+            }
         },
 
         clean() {
@@ -507,12 +597,29 @@
             }
         },
 
+        async claimReward(questId) {
+            return await Mods.API.post({
+                url: `/quests/${questId}/claim-reward`,
+                body: { platform: 0, location: 11, is_targeted: false, metadata_raw: null, metadata_sealed: null, traffic_metadata_raw: null, traffic_metadata_sealed: null }
+            });
+        },
+
+        // safely aborts a broken or timed-out task, marks it as FAILED in the UI,
+        // and adds it to the skip list to prevent infinite retry loops
+        failTask(q, t, reason) {
+            const currentProgress = Logger.tasks.get(q.id)?.cur ?? 0;
+            Logger.updateTask(q.id, { name: t.name, type: t.type, cur: currentProgress, max: t.target, status: "FAILED" });
+            Logger.log(`[Failed] ${t.name} aborted: ${reason}`, 'err');
+            Tasks.skipped.add(q.id);
+            setTimeout(() => Logger.removeTask(q.id), 2000);  // ms before clearing finished tasks
+        },
+
         // adaptive speed: fewer API calls for longer videos, conservative for short ones
         _videoSpeed(target) {
-            if (target <= 100) return 5;
-            if (target <= 300) return 15;
-            if (target <= 600) return 25;
-            return 40;
+            if (target <= 100) return 2;
+            if (target <= 300) return 3;
+            if (target <= 600) return 4;
+            return 5;
         },
 
         // sends fake video-progress timestamps until Discord marks the quest done
@@ -542,23 +649,21 @@
                     const err = ErrorHandler.classify(e);
                     if (err.isClientError) {
                         Logger.log(`[VIDEO] Quest ${t.name} unavailable (${err.status}). Skipping.`, 'warn');
-                        return;
+                        return Tasks.failTask(q, t, `Client Error ${err.status}`);
                     }
-                    if (failCount >= CONFIG.MAX_TASK_FAILURES) {
-                        Logger.log(`[VIDEO] Too many failures on ${t.name}. Giving up.`, 'err');
-                        return;
+                    if (failCount >= SYS.MAX_TASK_FAILURES) {
+                        return Tasks.failTask(q, t, 'Too many network failures');
                     }
-                    Logger.log(`[VIDEO] Progress failed (${failCount}/${CONFIG.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
+                    Logger.log(`[VIDEO] Progress failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
                 }
 
                 Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
 
-                if (Date.now() - startTime > CONFIG.MAX_TASK_TIME) {
-                    Logger.log(`[Timeout] Video ${t.name} stuck after ${((Date.now() - startTime) / 1000).toFixed(0)}s.`, 'err');
-                    break;
+                if (Date.now() - startTime > SYS.MAX_TIME) {
+                    return Tasks.failTask(q, t, 'Timeout exceeded');
                 }
 
-                await sleep(CONFIG.VIDEO_CHECK_INTERVAL);
+                await sleep(1000);
             }
             if (RUNTIME.running) {
                 Logger.log(`[VIDEO] ${t.name} done in ${calls} API calls`, 'debug');
@@ -575,7 +680,7 @@
             const gameData = await this.fetchGameData(t.appId, t.name);
 
             return new Promise(resolve => {
-                const pid = rnd(CONFIG.PID_MIN, CONFIG.PID_MAX);
+                const pid = rnd(10000, 50000);
                 const game = {
                     id: gameData.id, name: gameData.name, icon: gameData.icon,
                     pid, pidPath: [pid], processName: gameData.name, start: Date.now(),
@@ -587,6 +692,7 @@
 
                 let cleanupHook;
                 let cleaned = false;
+                let safetyTimer;
 
                 if (type === "STREAM") {
                     const real = Mods.StreamStore?.getStreamerActiveStreamMetadata;
@@ -602,36 +708,37 @@
                 Logger.updateTask(q.id, { name: t.name, type, cur: 0, max: t.target, status: "RUNNING" });
                 Logger.log(`[${type}] Started: ${gameData.name}`, 'debug');
 
-                const safetyTimer = setTimeout(() => {
-                    if (RUNTIME.running) Logger.log(`[Timeout] Task ${t.name} exceeded 25m. Skipping.`, 'err');
+                const finish = () => {
+                    if (cleaned) return;
+                    cleaned = true;
+                    clearTimeout(safetyTimer);
+                    try { cleanupHook(); } catch (e) { Logger.log(`[Cleanup] ${e.message}`, 'debug'); }
+                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
+                    RUNTIME.cleanups.delete(finish);
+                };
+
+                safetyTimer = setTimeout(() => {
+                    if (RUNTIME.running) Tasks.failTask(q, t, 'Timeout exceeded (25m)');
                     finish();
                     resolve();
-                }, CONFIG.MAX_TASK_TIME);
+                }, SYS.MAX_TIME);
 
                 const check = (d) => {
-                    if (!RUNTIME.running) { clearTimeout(safetyTimer); finish(); resolve(); return; }
+                    if (!RUNTIME.running) { finish(); resolve(); return; }
                     if (d?.questId !== q.id) return;
 
                     const prog = d.userStatus?.progress?.[key]?.value ?? d.userStatus?.streamProgressSeconds ?? 0;
                     Logger.updateTask(q.id, { name: t.name, type, cur: prog, max: t.target, status: "RUNNING" });
 
                     if (prog >= t.target) {
-                        clearTimeout(safetyTimer);
                         finish();
                         Tasks.finish(q, t);
                         resolve();
                     }
                 };
 
-                // idempotent — safe to call from timeout, heartbeat, or shutdown
-                const finish = () => {
-                    if (cleaned) return;
-                    cleaned = true;
-                    try { cleanupHook(); } catch (e) { Logger.log(`[Cleanup] ${e.message}`, 'debug'); }
-                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
-                };
-
                 Mods.Dispatcher?.subscribe(CONST.EVT.HEARTBEAT, check);
+                RUNTIME.cleanups.add(finish);
             });
         },
 
@@ -645,35 +752,38 @@
 
             return new Promise(resolve => {
                 let cleaned = false;
+                let safetyTimer;
 
-                const safetyTimer = setTimeout(() => {
-                    if (RUNTIME.running) Logger.log(`[Timeout] Achievement ${t.name} — join the Activity manually to complete it.`, 'warn');
+                const finish = () => {
+                    if (cleaned) return;
+                    cleaned = true;
+                    clearTimeout(safetyTimer);
+                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
+                    RUNTIME.cleanups.delete(finish);
+                };
+
+                safetyTimer = setTimeout(() => {
+                    if (RUNTIME.running) Tasks.failTask(q, t, 'Timeout - achievement not earned manually');
                     finish();
                     resolve();
-                }, CONFIG.MAX_TASK_TIME);
+                }, SYS.MAX_TIME);
 
                 const check = (d) => {
-                    if (!RUNTIME.running) { clearTimeout(safetyTimer); finish(); resolve(); return; }
+                    if (!RUNTIME.running) { finish(); resolve(); return; }
                     if (d?.questId !== q.id) return;
 
                     const prog = d.userStatus?.progress?.ACHIEVEMENT_IN_ACTIVITY?.value ?? 0;
                     Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: prog, max: t.target, status: "RUNNING" });
 
                     if (prog >= t.target) {
-                        clearTimeout(safetyTimer);
                         finish();
                         Tasks.finish(q, t);
                         resolve();
                     }
                 };
 
-                const finish = () => {
-                    if (cleaned) return;
-                    cleaned = true;
-                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
-                };
-
                 Mods.Dispatcher?.subscribe(CONST.EVT.HEARTBEAT, check);
+                RUNTIME.cleanups.add(finish);
             });
         },
 
@@ -687,7 +797,9 @@
                 Logger.log(`[ACTIVITY] Channel lookup error: ${e.message}`, 'debug');
             }
 
-            if (!chan) return Logger.log(`[ACTIVITY] No voice channel found for ${t.name}`, 'err');
+            if (!chan) {
+                return Tasks.failTask(q, t, 'No voice channel found');
+            }
 
             const key = `call:${chan}:${rnd(1000, 9999)}`;
             let cur = 0;
@@ -712,58 +824,54 @@
                     const err = ErrorHandler.classify(e);
                     if (err.isClientError) {
                         Logger.log(`[ACTIVITY] Quest unavailable (${err.status}). Skipping.`, 'warn');
-                        return;
+                        return Tasks.failTask(q, t, `Client Error ${err.status}`);
                     }
-                    if (failCount >= CONFIG.MAX_TASK_FAILURES) {
-                        Logger.log(`[ACTIVITY] Too many failures on ${t.name}. Giving up.`, 'err');
-                        return;
+                    if (failCount >= SYS.MAX_TASK_FAILURES) {
+                        return Tasks.failTask(q, t, 'Too many network failures');
                     }
-                    Logger.log(`[ACTIVITY] Heartbeat failed (${failCount}/${CONFIG.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
+                    Logger.log(`[ACTIVITY] Heartbeat failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
                 }
 
-                if (Date.now() - startTime > CONFIG.MAX_TASK_TIME) {
-                    Logger.log(`[Timeout] Activity ${t.name} stuck after ${((Date.now() - startTime) / 1000).toFixed(0)}s.`, 'err');
-                    break;
+                if (Date.now() - startTime > SYS.MAX_TIME) {
+                    return Tasks.failTask(q, t, 'Timeout exceeded');
                 }
-                await sleep(CONFIG.ACTIVITY_HEARTBEAT_INTERVAL);
+                await sleep(20000);
             }
             if (RUNTIME.running && cur >= t.target) Tasks.finish(q, t);
         },
 
         async finish(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
-            Logger.log(`Completed: ${t.name}`, 'success');
+            Logger.log(`[Completed] ${t.name}`, 'success');
 
             try {
                 if (typeof Notification !== 'undefined' && Notification.permission === "granted") {
-                    new Notification("Orion: Quest Completed", {
-                        body: t.name,
-                        icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp",
-                        tag: `orion-${q.id}`
-                    });
+                    new Notification("Orion: Quest Completed", { body: t.name, icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp", tag: `orion-${q.id}` });
                 }
             } catch (e) { Logger.log(`[Notification] ${e.message}`, 'debug'); }
 
-            // optimistic claim — try without captcha, show button if challenged
-            try {
-                const claimRes = await Mods.API.post({
-                    url: `/quests/${q.id}/claim-reward`,
-                    body: { platform: 0, location: 11, is_targeted: false, metadata_raw: null, metadata_sealed: null, traffic_metadata_raw: null, traffic_metadata_sealed: null }
-                });
-                if (claimRes?.body?.claimed_at) {
-                    Logger.log(`[Claim] ${t.name} reward claimed automatically!`, 'success');
-                    Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
-                    setTimeout(() => Logger.removeTask(q.id), CONFIG.REMOVE_DELAY);
-                    return;
+            if (CONFIG.TRY_TO_CLAIM_REWARD) {
+                try {
+                    // optimistic claim — try without captcha, show button if challenged
+                    const claimRes = await this.claimReward(q.id);
+                    
+                    if (claimRes?.body?.claimed_at) {
+                        Logger.log(`[Claim] ${t.name} reward claimed automatically!`, 'success');
+                        Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
+                        setTimeout(() => Logger.removeTask(q.id), 2000);  // ms before clearing finished tasks
+                        return;
+                    }
+                } catch (e) {
+                    // captcha required or other error — fall through to claim button
+                    const needsCaptcha = e?.body?.captcha_key || e?.body?.captcha_sitekey;
+                    if (needsCaptcha) {
+                        Logger.log(`[Claim] ${t.name} needs captcha — use the CLAIM button`, 'warn');
+                    } else {
+                        Logger.log(`[Claim] Auto-claim failed (${e?.status}): ${e?.body?.message ?? e?.message}`, 'debug');
+                    }
                 }
-            } catch (e) {
-                // captcha required or other error — fall through to claim button
-                const needsCaptcha = e?.body?.captcha_key || e?.body?.captcha_sitekey;
-                if (needsCaptcha) {
-                    Logger.log(`[Claim] ${t.name} needs captcha — use the CLAIM button`, 'warn');
-                } else {
-                    Logger.log(`[Claim] Auto-claim failed (${e?.status}): ${e?.body?.message ?? e?.message}`, 'debug');
-                }
+            } else {
+                Logger.log(`[Claim] Auto-claim disabled. Waiting for manual action.`, 'info');
             }
 
             // show claim button instead of auto-removing
@@ -876,17 +984,25 @@
 
     /* ── main loop ─────────────────────────────────────────────── */
 
-    // run N task functions concurrently, staggered to avoid burst traffic
+    // run async tasks concurrently up to a specified limit
     async function runConcurrent(tasks, limit) {
-        const executing = [];
+        const executing = new Set();
+        
         for (const task of tasks) {
             if (!RUNTIME.running) break;
-            const p = task().then(() => executing.splice(executing.indexOf(p), 1));
-            executing.push(p);
-            await sleep(CONFIG.TASK_STAGGER_DELAY);
-            if (executing.length >= limit) await Promise.race(executing);
+            
+            const p = task().finally(() => executing.delete(p));
+            executing.add(p);
+            
+            await sleep(500); // stagger initialization to avoid API bursts
+            
+            if (executing.size >= limit) {
+                await Promise.race(executing);
+            }
         }
-        return Promise.all(executing);
+        
+        // use allSettled to prevent a single rejection from crashing the batch
+        return Promise.allSettled(executing);
     }
 
     async function main() {
@@ -931,7 +1047,7 @@
                             }
                         }
                     }
-                    await sleep(CONFIG.ENROLL_REFETCH_DELAY);
+                    await sleep(1500);  // wait for Discord DB to register enrollment
                     quests = getQuests();
                 }
 
@@ -1002,18 +1118,18 @@
                     await Promise.all([pGames, pVideos]);
                 } else {
                     if (active.length === 0) { Logger.log('All quests finished.', 'success'); break; }
-                    else await sleep(CONFIG.CYCLE_IDLE_WAIT);
+                    else await sleep(5000);  // idle loop wait
                 }
 
                 if (!RUNTIME.running) break;
                 Logger.log(`Cycle #${loopCount} complete. Rescanning...`, 'success');
-                await sleep(CONFIG.CYCLE_RESCAN_DELAY);
+                await sleep(3000);
                 loopCount++;
 
             } catch (cycleError) {
                 Logger.log(`[Cycle] Error in cycle #${loopCount}: ${cycleError?.message ?? cycleError}`, 'err');
                 console.error(cycleError);
-                await sleep(CONFIG.CYCLE_RESCAN_DELAY);
+                await sleep(3000);
                 loopCount++;
             }
         }
@@ -1021,11 +1137,13 @@
         Logger.shutdown();
     }
 
-    // kick it off — top-level catch is the last resort before the script dies
     main().catch(e => {
         const msg = e?.message ?? e?.toString?.() ?? "Unknown fatal error";
         console.error('[Orion Fatal]', e);
         try { Logger.log(`[FATAL] ${msg}`, 'err'); } catch (_) { }
         Logger.shutdown();
+        
+        // Failsafe: release lock unconditionally so user can retry without reloading tab
+        setTimeout(() => { window.orionLock = false; }, 1500);
     });
 })();

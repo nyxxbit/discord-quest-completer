@@ -1,9 +1,9 @@
 <div align="center">
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.1
+**Auto-complete every Discord Quest in seconds** &mdash; v4.2
 
-[![Version](https://img.shields.io/badge/v4.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -20,9 +20,10 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ## Why Orion?
 
 - **Completes ALL quest types** &mdash; Video, Game, Stream, Activity, and the new Achievement quests
-- **Auto-claims rewards** &mdash; tries to claim without captcha; shows a CLAIM button when captcha is needed
+- **Auto-claiming** &mdash; Claim rewards directly from the dashboard. Tries to claim automatically (if enabled), or provides a smart interactive button if captcha is needed
 - **Resilient module loader** &mdash; finds Discord stores by class name, not minified paths. Survives Discord updates
-- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, adaptive video speed
+- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, adaptive video speed. Distinguishes between global and endpoint limits, non-blocking retries
+- **Fault-tolerant execution** &mdash; One failed quest won't break the queue (`Promise.allSettled`)
 - **Zero setup** &mdash; single paste into the console. No Node.js, no npm, no extensions
 
 ---
@@ -77,34 +78,32 @@ Draggable overlay with persistent position. Live-sorts tasks so you always see w
 |----------|-------|--------|
 | 1st | **Running** (highest progress first) | Blue accent, animated progress bar |
 | 2nd | **Queued** | Orange accent, dimmed |
-| 3rd | **Completed** | Green checkmark + CLAIM button if captcha needed |
+| 3rd | **Completed** | Green checkmark + Interactive CLAIM button if manual action needed |
 
 Desktop notifications fire on each quest completion.
 
 ---
 
-## Auto-claim
+## Auto & In-UI Claiming
 
-After completing a quest, Orion tries to claim the reward automatically:
+You can configure Orion's claiming behavior via the `TRY_TO_CLAIM_REWARD` setting.
 
-- **No captcha needed?** &rarr; Claimed instantly, logged as `[Claim] reward claimed automatically!`
-- **Captcha required?** &rarr; Shows a green **CLAIM REWARD** button on the task card that opens the quest page
+- **Automated Claiming:** If enabled, tries to claim instantly upon completion.
+- **In-UI Button:** If auto-claim fails due to captcha, or is disabled, a **CLAIM REWARD** button appears directly on the task card.
 
 ---
 
 ## Configuration
 
-Tweak before pasting. Timing values in milliseconds unless noted.
+Tweak before pasting. Timing values, intervals, and sensitive limits are now hardcoded internally to prevent accidental breakage.
 
 ```js
 const CONFIG = {
-    VIDEO_SPEED: 5,              // baseline fake seconds per tick (auto-scales for longer videos)
+    TRY_TO_CLAIM_REWARD: false,  // disable auto-claim to avoid captcha popups
     HIDE_ACTIVITY: false,        // suppress "Playing..." from friends list
-    GAME_CONCURRENCY: 1,         // parallel game tasks (1 = safest)
-    REQUEST_DELAY: 1500,         // gap between API calls
-    MAX_TASK_TIME: 25 * 60_000,  // hard timeout per task
-    MAX_TASK_FAILURES: 5,        // consecutive errors before abandoning a task
-    MAX_RETRIES: 3,              // retries for transient (5xx) errors
+    GAME_CONCURRENCY: 1,         // >1 risks detection and ban, keep at 1
+    VIDEO_CONCURRENCY: 2,        // parallel video tasks
+    MAX_LOG_ITEMS: 60,           // UI log limit
 };
 ```
 
@@ -114,12 +113,13 @@ const CONFIG = {
 
 | Scenario | Behavior |
 |----------|----------|
-| **429 / 5xx** | Exponential backoff, re-queued up to `MAX_RETRIES` |
+| **429 / 5xx** | Exponential backoff, re-queued up to `MAX_RETRIES`, distinguishes global vs endpoint limits |
 | **404 on enroll** | Quest added to skip-list, script continues |
 | **Repeated failures** | Task abandoned after `MAX_TASK_FAILURES` consecutive errors |
 | **25 min timeout** | Task force-stopped, cycle advances |
 | **Missing modules** | Required modules validated on boot; optional ones log a warning |
 | **Claim fails** | Falls back to CLAIM button in dashboard |
+| **Fatal crash** | Unconditionally releases `window.orionLock` so the script can be re-run without refreshing |
 
 ---
 
@@ -129,7 +129,7 @@ Single-file IIFE. No build tools, no external deps.
 
 ```
 index.js
-├─ CONFIG / CONST / RUNTIME    tunables, frozen constants, mutable state
+├─ CONFIG / SYS / RUNTIME      tunables, frozen system limits, active cleanups
 ├─ ErrorHandler                classifies HTTP errors (retry / skip / fatal)
 ├─ Logger                      DOM dashboard + task state + log output
 ├─ Traffic                     FIFO request queue with exponential backoff
@@ -146,6 +146,14 @@ Unlike other scripts that break on every Discord update, Orion finds stores by t
 ---
 
 ## Changelog
+
+### v4.2
+- **Native UI Claiming:** Added in-UI claiming via Claim Reward button.
+- **Rigid Configuration:** Moved hardcoded system limits to a frozen `SYS` object and added `TRY_TO_CLAIM_REWARD` config.
+- **Fault-Tolerant Concurrency:** Switched to `Promise.allSettled` to prevent queue crashes on a single task failure.
+- **Strict Garbage Collection:** Added `RUNTIME.cleanups` to track and safely flush active event listeners on script stop.
+- **RPC & Lock Failsafes:** Forces dummy PID `9999` to reliably clear "Playing" status, and releases `window.orionLock` on fatal errors.
+- **Granular Rate Limiting:** Differentiates between global (queue-freezing) and endpoint-specific API limits.
 
 ### v4.1
 - Resilient `loadModules()` &mdash; uses `constructor.displayName` instead of hardcoded `.A/.Z/.Ay/.ZP` paths
