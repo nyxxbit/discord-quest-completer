@@ -168,9 +168,11 @@
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
-                .claim-btn { padding: 4px 10px; background: ${CONFIG.SUCCESS}; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: all 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
-                .claim-btn:hover { background: #43c66f; box-shadow: 0 0 8px rgba(67, 198, 111, 0.5); }
-                .claim-btn:active { background: #3ba55c; box-shadow: 0 0 4px rgba(67, 198, 111, 0.3); }
+                .claim-btn, .goto-btn { padding: 4px 10px; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: filter 0.2s ease, background 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
+                .claim-btn { background: ${CONFIG.SUCCESS}; }
+                .goto-btn { background: ${CONFIG.THEME}; }
+                .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
+                .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
             `;
             document.head.appendChild(style);
 
@@ -219,6 +221,13 @@
             };
 
             document.getElementById('orion-body').addEventListener('click', async (e) => {
+                if (e.target.classList.contains('goto-btn')) {
+                    if (Mods.Router) {
+                        Mods.Router.transitionTo('/quest-home');
+                    };
+                    return;
+                }
+                
                 if (e.target.classList.contains('claim-btn')) {
                     const btn = e.target;
                     const questId = btn.getAttribute('data-id');
@@ -292,10 +301,11 @@
                     
                     const fill = card.querySelector('.progress-fill');
                     if (fill) fill.style.width = `${pct}%`;
-                    
-                    const progressText = card.querySelector('.progress-text');
-                    if (progressText) progressText.innerText = `${Math.floor(newData.cur)} / ${newData.max}s`;
-                    
+
+                    const unit = newData.type === 'ACHIEVEMENT' ? '' : 's';
+                    const progressText = card.querySelector('.progress-text') || card.querySelectorAll('.task-meta span')[1];
+                    if (progressText) progressText.textContent = `${Math.floor(newData.cur)} / ${newData.max}${unit}`;
+
                     return;
                 }
             }
@@ -356,12 +366,24 @@
                 else if (t.type?.includes('GAME')) icon = ICONS.GAME;
                 else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
                 
-                const claimBtn = t.claimable ? `<button class="claim-btn" data-id="${t.questId}">CLAIM REWARD</button>` : '';
-                const statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
+                let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
+                let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
+                const unit = t.type === 'ACHIEVEMENT' ? '' : 's';
+                
+                let actionBtn = '';
+
+                if (t.claimable) {
+                    actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
+                } else if (t.type === 'ACHIEVEMENT' && t.status === 'RUNNING') {
+                    statusText = 'ACTION REQUIRED';
+                    progressLabel = 'Please, complete manually';
+                    actionBtn = `<button class="goto-btn">GO TO QUESTS</button>`;
+                }
+
                 const stateClass = t.done ? 'done' : t.failed ? 'failed' : t.pending ? 'pending' : '';
                 const removingClass = t.removing ? 'removing' : '';
                 
-                return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress'}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${claimBtn}</div></div>`;
+                return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${progressLabel}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}${unit}</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${actionBtn}</div></div>`;
             }).join('');
         }
     };
@@ -955,6 +977,24 @@
                 return undefined;
             }
 
+            // Navigation functions are exported standalone and minified.
+            // transitionTo is identified by searching its source code for the "transitionTo -" signature.
+            function findRouter() {
+                for (const m of modules) {
+                    try {
+                        const exp = m?.exports;
+                        if (!exp) continue;
+
+                        for (const prop of Object.values(exp)) {
+                            if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
+                                return { transitionTo: prop };
+                            }
+                        }
+                    } catch { }
+                }
+                return undefined;
+            }
+
             const found = {
                 QuestStore:     findStore('QuestStore'),
                 RunStore:       findStore('RunningGameStore'),
@@ -962,14 +1002,15 @@
                 ChanStore:      findStore('ChannelStore'),
                 GuildChanStore: findStore('GuildChannelStore'),
                 Dispatcher:     findDispatcher(),
-                API:            findAPI()
+                API:            findAPI(),
+                Router:         findRouter()
             };
 
             const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
             const missing = required.filter(k => !found[k]);
             if (missing.length > 0) throw new Error(`Core modules not found: ${missing.join(', ')}`);
 
-            const optional = ['StreamStore', 'ChanStore', 'GuildChanStore'];
+            const optional = ['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
             optional.forEach(k => { if (!found[k]) Logger.log(`[Modules] ${k} not found - some features may be limited`, 'warn'); });
 
             Mods = found;
