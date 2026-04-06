@@ -168,9 +168,11 @@
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
-                .claim-btn { padding: 4px 10px; background: ${CONFIG.SUCCESS}; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: all 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
-                .claim-btn:hover { background: #43c66f; box-shadow: 0 0 8px rgba(67, 198, 111, 0.5); }
-                .claim-btn:active { background: #3ba55c; box-shadow: 0 0 4px rgba(67, 198, 111, 0.3); }
+                .claim-btn, .goto-btn { padding: 4px 10px; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: filter 0.2s ease, background 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
+                .claim-btn { background: ${CONFIG.SUCCESS}; }
+                .goto-btn { background: ${CONFIG.THEME}; }
+                .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
+                .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
             `;
             document.head.appendChild(style);
 
@@ -219,6 +221,13 @@
             };
 
             document.getElementById('orion-body').addEventListener('click', async (e) => {
+                if (e.target.classList.contains('goto-btn')) {
+                    if (Mods.Router) {
+                        Mods.Router.transitionTo('/quest-home');
+                    };
+                    return;
+                }
+                
                 if (e.target.classList.contains('claim-btn')) {
                     const btn = e.target;
                     const questId = btn.getAttribute('data-id');
@@ -234,7 +243,7 @@
                         if (claimRes?.body?.claimed_at) {
                             btn.innerText = "CLAIMED!";
                             btn.style.background = CONFIG.SUCCESS;
-                            this.log(`[Claim] ${taskData?.name || 'Reward'} claimed successfully!`, 'success');
+                            this.log(`[Claim] Reward for "${taskData?.name || 'Quest'}" claimed successfully!`, 'success');
                             
                             this.updateTask(questId, { ...taskData, status: "CLAIMED", claimable: false });
                             setTimeout(() => this.removeTask(questId), 2000);
@@ -243,7 +252,7 @@
                         btn.innerText = "CLAIM REWARD";
                         btn.style.opacity = "1";
                         btn.style.pointerEvents = "auto";
-                        this.log(`[Claim] Action required for ${taskData?.name || 'quest'}. Check Discord UI for captcha.`, 'warn');
+                        this.log(`[Claim] Action required for "${taskData?.name || 'Quest'}". Check Discord UI for captcha.`, 'warn');
                     }
                 }
             });
@@ -260,7 +269,7 @@
         shutdown() {
             if (!RUNTIME.running) return;
             RUNTIME.running = false;
-            this.log("Stopping script & cleaning up...", "warn");
+            this.log("[System] Stopping script & cleaning up...", "warn");
 
             // safely force-execute all registered task cleanups (unsubscribes/unpatches)
             for (const cleanupFn of RUNTIME.cleanups) {
@@ -292,10 +301,11 @@
                     
                     const fill = card.querySelector('.progress-fill');
                     if (fill) fill.style.width = `${pct}%`;
-                    
-                    const progressText = card.querySelector('.progress-text');
-                    if (progressText) progressText.innerText = `${Math.floor(newData.cur)} / ${newData.max}s`;
-                    
+
+                    const unit = newData.type === 'ACHIEVEMENT' ? '' : 's';
+                    const progressText = card.querySelector('.progress-text') || card.querySelectorAll('.task-meta span')[1];
+                    if (progressText) progressText.textContent = `${Math.floor(newData.cur)} / ${newData.max}${unit}`;
+
                     return;
                 }
             }
@@ -316,7 +326,7 @@
             console.log(`%c[ORION] %c${msg}`, `color: ${CONFIG.THEME}; font-weight: bold;`, `color: ${colors[type] || colors.info}`);
             try {
                 const box = document.getElementById('orion-logs');
-                if (box) {
+                if (box && type !== 'debug') {
                     const el = document.createElement('div'); el.className = `log-item c-${type}`;
                     el.innerHTML = `<span class="log-ts">${new Date().toLocaleTimeString().split(' ')[0]}</span> <span>${msg}</span>`;
                     box.appendChild(el); box.scrollTop = box.scrollHeight;
@@ -356,12 +366,24 @@
                 else if (t.type?.includes('GAME')) icon = ICONS.GAME;
                 else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
                 
-                const claimBtn = t.claimable ? `<button class="claim-btn" data-id="${t.questId}">CLAIM REWARD</button>` : '';
-                const statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
+                let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
+                let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
+                const unit = t.type === 'ACHIEVEMENT' ? '' : 's';
+                
+                let actionBtn = '';
+
+                if (t.claimable) {
+                    actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
+                } else if (t.type === 'ACHIEVEMENT' && t.status === 'RUNNING') {
+                    statusText = 'ACTION REQUIRED';
+                    progressLabel = 'Please, complete manually';
+                    actionBtn = `<button class="goto-btn">GO TO QUESTS</button>`;
+                }
+
                 const stateClass = t.done ? 'done' : t.failed ? 'failed' : t.pending ? 'pending' : '';
                 const removingClass = t.removing ? 'removing' : '';
                 
-                return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress'}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}s</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${claimBtn}</div></div>`;
+                return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${progressLabel}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}${unit}</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${actionBtn}</div></div>`;
             }).join('');
         }
     };
@@ -407,7 +429,7 @@
                         const delay = (e.body?.retry_after ?? Math.pow(2, req.attempts)) * 1000;
                         const isGlobal = e.body?.global === true;
                         
-                        Logger.log(`[${err.status}] Retry ${req.attempts}/${SYS.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s`, 'warn');
+                        Logger.log(`[Network] Retry ${req.attempts}/${SYS.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s (HTTP ${err.status})`, 'warn');
                         
                         if (isGlobal) {
                             // Freeze queue on global rate limits to prevent API abuse
@@ -423,10 +445,10 @@
                             }, delay + 500);
                         }
                     } else if (err.isClientError) {
-                        Logger.log(`[${err.status}] ${err.message}: ${req.url}`, 'debug');
+                        Logger.log(`[Network] HTTP ${err.status}: ${req.url}`, 'debug');
                         req.reject(e);
                     } else {
-                        Logger.log(`[Error] ${err.message}: ${req.url}`, 'err');
+                        Logger.log(`[Network] Request to ${req.url} failed: ${err.message}`, 'err');
                         req.reject(e);
                     }
                 }
@@ -609,7 +631,7 @@
         failTask(q, t, reason) {
             const currentProgress = Logger.tasks.get(q.id)?.cur ?? 0;
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: currentProgress, max: t.target, status: "FAILED" });
-            Logger.log(`[Failed] ${t.name} aborted: ${reason}`, 'err');
+            Logger.log(`[Task] Aborted "${t.name}": ${reason}`, 'err');
             Tasks.skipped.add(q.id);
             setTimeout(() => Logger.removeTask(q.id), 2000);  // ms before clearing finished tasks
         },
@@ -648,13 +670,13 @@
                     failCount++;
                     const err = ErrorHandler.classify(e);
                     if (err.isClientError) {
-                        Logger.log(`[VIDEO] Quest ${t.name} unavailable (${err.status}). Skipping.`, 'warn');
+                        Logger.log(`[Task] Video quest unavailable (HTTP ${err.status}). Skipping.`, 'warn');
                         return Tasks.failTask(q, t, `Client Error ${err.status}`);
                     }
                     if (failCount >= SYS.MAX_TASK_FAILURES) {
                         return Tasks.failTask(q, t, 'Too many network failures');
                     }
-                    Logger.log(`[VIDEO] Progress failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
+                    Logger.log(`[Task] VIDEO progress failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
                 }
 
                 Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
@@ -666,7 +688,7 @@
                 await sleep(1000);
             }
             if (RUNTIME.running) {
-                Logger.log(`[VIDEO] ${t.name} done in ${calls} API calls`, 'debug');
+                Logger.log(`[Task] VIDEO "${t.name}" done in ${calls} API calls`, 'debug');
                 Tasks.finish(q, t);
             }
         },
@@ -706,13 +728,13 @@
                 }
 
                 Logger.updateTask(q.id, { name: t.name, type, cur: 0, max: t.target, status: "RUNNING" });
-                Logger.log(`[${type}] Started: ${gameData.name}`, 'debug');
+                Logger.log(`[Task] Started ${type}: ${gameData.name}`, 'info');
 
                 const finish = () => {
                     if (cleaned) return;
                     cleaned = true;
                     clearTimeout(safetyTimer);
-                    try { cleanupHook(); } catch (e) { Logger.log(`[Cleanup] ${e.message}`, 'debug'); }
+                    try { cleanupHook(); } catch (e) { Logger.log(`[Task] Cleanup: ${e.message}`, 'debug'); }
                     try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
                     RUNTIME.cleanups.delete(finish);
                 };
@@ -748,7 +770,7 @@
         // since faking the achievement server-side isn't possible via API alone.
         async ACHIEVEMENT(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING" });
-            Logger.log(`[ACHIEVEMENT] Waiting for: ${t.name} (join the Activity to earn it)`, 'info');
+            Logger.log(`[Task] Action required: Join Activity to earn "${t.name}"`, 'warn');
 
             return new Promise(resolve => {
                 let cleaned = false;
@@ -794,7 +816,7 @@
                 chan = Mods.ChanStore?.getSortedPrivateChannels()?.[0]?.id
                     ?? Object.values(Mods.GuildChanStore?.getAllGuilds() ?? {}).find(g => g?.VOCAL?.length)?.VOCAL?.[0]?.channel?.id;
             } catch (e) {
-                Logger.log(`[ACTIVITY] Channel lookup error: ${e.message}`, 'debug');
+                Logger.log(`[Task] ACTIVITY channel lookup error: ${e.message}`, 'debug');
             }
 
             if (!chan) {
@@ -823,13 +845,13 @@
                     failCount++;
                     const err = ErrorHandler.classify(e);
                     if (err.isClientError) {
-                        Logger.log(`[ACTIVITY] Quest unavailable (${err.status}). Skipping.`, 'warn');
+                        Logger.log(`[Task] Activity quest unavailable (HTTP ${err.status}). Skipping.`, 'warn');
                         return Tasks.failTask(q, t, `Client Error ${err.status}`);
                     }
                     if (failCount >= SYS.MAX_TASK_FAILURES) {
                         return Tasks.failTask(q, t, 'Too many network failures');
                     }
-                    Logger.log(`[ACTIVITY] Heartbeat failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
+                    Logger.log(`[Task] ACTIVITY heartbeat failed (${failCount}/${SYS.MAX_TASK_FAILURES}): ${err.message}`, 'debug');
                 }
 
                 if (Date.now() - startTime > SYS.MAX_TIME) {
@@ -842,7 +864,7 @@
 
         async finish(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
-            Logger.log(`[Completed] ${t.name}`, 'success');
+            Logger.log(`[Task] Completed "${t.name}"!`, 'success');
 
             try {
                 if (typeof Notification !== 'undefined' && Notification.permission === "granted") {
@@ -856,7 +878,7 @@
                     const claimRes = await this.claimReward(q.id);
                     
                     if (claimRes?.body?.claimed_at) {
-                        Logger.log(`[Claim] ${t.name} reward claimed automatically!`, 'success');
+                        Logger.log(`[Claim] Reward for "${t.name}" claimed automatically!`, 'success');
                         Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
                         setTimeout(() => Logger.removeTask(q.id), 2000);  // ms before clearing finished tasks
                         return;
@@ -865,13 +887,11 @@
                     // captcha required or other error — fall through to claim button
                     const needsCaptcha = e?.body?.captcha_key || e?.body?.captcha_sitekey;
                     if (needsCaptcha) {
-                        Logger.log(`[Claim] ${t.name} needs captcha — use the CLAIM button`, 'warn');
+                        Logger.log(`[Claim] Captcha required for "${t.name}". Use UI button.`, 'warn');
                     } else {
-                        Logger.log(`[Claim] Auto-claim failed (${e?.status}): ${e?.body?.message ?? e?.message}`, 'debug');
+                        Logger.log(`[Claim] Auto-claim failed for "${t.name}": ${e?.body?.message ?? e?.message}`, 'err');
                     }
                 }
-            } else {
-                Logger.log(`[Claim] Auto-claim disabled. Waiting for manual action.`, 'info');
             }
 
             // show claim button instead of auto-removing
@@ -955,6 +975,24 @@
                 return undefined;
             }
 
+            // Navigation functions are exported standalone and minified.
+            // transitionTo is identified by searching its source code for the "transitionTo -" signature.
+            function findRouter() {
+                for (const m of modules) {
+                    try {
+                        const exp = m?.exports;
+                        if (!exp) continue;
+
+                        for (const prop of Object.values(exp)) {
+                            if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
+                                return { transitionTo: prop };
+                            }
+                        }
+                    } catch { }
+                }
+                return undefined;
+            }
+
             const found = {
                 QuestStore:     findStore('QuestStore'),
                 RunStore:       findStore('RunningGameStore'),
@@ -962,21 +1000,22 @@
                 ChanStore:      findStore('ChannelStore'),
                 GuildChanStore: findStore('GuildChannelStore'),
                 Dispatcher:     findDispatcher(),
-                API:            findAPI()
+                API:            findAPI(),
+                Router:         findRouter()
             };
 
             const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
             const missing = required.filter(k => !found[k]);
             if (missing.length > 0) throw new Error(`Core modules not found: ${missing.join(', ')}`);
 
-            const optional = ['StreamStore', 'ChanStore', 'GuildChanStore'];
-            optional.forEach(k => { if (!found[k]) Logger.log(`[Modules] ${k} not found - some features may be limited`, 'warn'); });
+            const optional = ['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
+            optional.forEach(k => { if (!found[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
 
             Mods = found;
             Patcher.init(Mods.RunStore);
             return true;
         } catch (e) {
-            Logger.log(`[Modules] ${e.message ?? e}`, 'err');
+            Logger.log(`[System] Module loading error: ${e.message ?? e}`, 'err');
             console.error(e);
             return false;
         }
@@ -1013,7 +1052,7 @@
 
         while (RUNTIME.running) {
             try {
-                Logger.log(`Starting Cycle #${loopCount}...`, 'info');
+                Logger.log(`[Cycle] Starting loop #${loopCount}...`, 'info');
 
                 const getQuests = () => {
                     const q = Mods.QuestStore.quests;
@@ -1032,7 +1071,7 @@
                 const toEnroll = incomplete.filter(q => !q.userStatus?.enrolledAt);
 
                 if (toEnroll.length > 0) {
-                    Logger.log(`Enrolling in ${toEnroll.length} new quests...`, 'warn');
+                    Logger.log(`[Enroll] Discovering and enrolling in ${toEnroll.length} new quests...`, 'warn');
                     for (const q of toEnroll) {
                         if (!RUNTIME.running) break;
                         try {
@@ -1041,9 +1080,9 @@
                             const questName = q.config?.messages?.questName ?? q.id;
                             if (ErrorHandler.isSkippableQuest(e)) {
                                 Tasks.skipped.add(q.id);
-                                Logger.log(`[Enroll] ${questName} unavailable (${e.status}). Added to skip list.`, 'warn');
+                                Logger.log(`[Enroll] "${questName}" unavailable (HTTP ${e.status}). Skipped.`, 'warn');
                             } else {
-                                Logger.log(`[Enroll] Failed for ${questName}: ${e?.message ?? e}`, 'err');
+                                Logger.log(`[Enroll] Failed for "${questName}": ${e?.message ?? e}`, 'err');
                             }
                         }
                     }
@@ -1058,7 +1097,7 @@
                     && !Tasks.skipped.has(q.id)
                 );
 
-                if (!active.length) { Logger.log('All quests finished.', 'success'); break; }
+                if (!active.length) { Logger.log('[System] All available quests are completed!', 'success'); break; }
 
                 const queues = { video: [], game: [] };
 
@@ -1112,22 +1151,22 @@
                 const totalTasks = queues.video.length + queues.game.length;
 
                 if (totalTasks > 0) {
-                    Logger.log(`Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
+                    Logger.log(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
                     const pGames = runConcurrent(queues.game, CONFIG.GAME_CONCURRENCY);
                     const pVideos = runConcurrent(queues.video, CONFIG.VIDEO_CONCURRENCY);
                     await Promise.all([pGames, pVideos]);
                 } else {
-                    if (active.length === 0) { Logger.log('All quests finished.', 'success'); break; }
+                    if (active.length === 0) { Logger.log('[System] All available quests are completed!', 'success'); break; }
                     else await sleep(5000);  // idle loop wait
                 }
 
                 if (!RUNTIME.running) break;
-                Logger.log(`Cycle #${loopCount} complete. Rescanning...`, 'success');
+                Logger.log(`[Cycle] Loop #${loopCount} complete. Waiting before rescan...`, 'info');
                 await sleep(3000);
                 loopCount++;
 
             } catch (cycleError) {
-                Logger.log(`[Cycle] Error in cycle #${loopCount}: ${cycleError?.message ?? cycleError}`, 'err');
+                Logger.log(`[Cycle] Error in loop #${loopCount}: ${cycleError?.message ?? cycleError}`, 'err');
                 console.error(cycleError);
                 await sleep(3000);
                 loopCount++;
@@ -1140,7 +1179,7 @@
     main().catch(e => {
         const msg = e?.message ?? e?.toString?.() ?? "Unknown fatal error";
         console.error('[Orion Fatal]', e);
-        try { Logger.log(`[FATAL] ${msg}`, 'err'); } catch (_) { }
+        try { Logger.log(`[System] FATAL: ${msg}`, 'err'); } catch (_) { }
         Logger.shutdown();
         
         // Failsafe: release lock unconditionally so user can retry without reloading tab
