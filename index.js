@@ -5,15 +5,13 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.3 (Enterprise)",
+        VERSION: "v4.4 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
         TRY_TO_CLAIM_REWARD: false,     // disable auto-claim to avoid captcha popups
         HIDE_ACTIVITY: false,           // suppress RPC status from friends list
-        GAME_CONCURRENCY: 1,            // >1 risks detection and ban, keep at 1
-        VIDEO_CONCURRENCY: 2,           // parallel video tasks
         MAX_LOG_ITEMS: 60               // UI log limit
     };
 
@@ -261,7 +259,9 @@
             document.getElementById('orion-stop').onclick = () => this.shutdown();
             document.addEventListener('keydown', e => (e.key === '>' || (e.shiftKey && e.key === '.')) && this.toggle());
 
-            try { if (Notification.permission === "default") Notification.requestPermission(); } catch (e) { }
+            try { if (Notification.permission === "default") Notification.requestPermission(); } catch (e) {
+                this.log(`[Notification] Request permission failed: ${e.message}`, 'debug');
+            }
         },
 
         toggle() { this.root.style.display = this.root.style.display === 'none' ? 'flex' : 'none'; },
@@ -273,12 +273,14 @@
 
             // safely force-execute all registered task cleanups (unsubscribes/unpatches)
             for (const cleanupFn of RUNTIME.cleanups) {
-                try { cleanupFn(); } catch (e) {}
+                try { cleanupFn(); } catch (e) {this.log(`[Cleanup] ${e.message}`, 'debug');}
             }
             RUNTIME.cleanups.clear();
 
             Patcher.clean();
             setTimeout(() => {
+                const styles = document.getElementById('orion-styles');
+                if (styles) styles.remove();
                 if (this.root?.parentElement) this.root.remove();
                 window.orionLock = false;
             }, 1000);
@@ -636,30 +638,41 @@
             setTimeout(() => Logger.removeTask(q.id), 2000);  // ms before clearing finished tasks
         },
 
-        // adaptive speed: fewer API calls for longer videos, conservative for short ones
-        _videoSpeed(target) {
-            if (target <= 100) return 2;
-            if (target <= 300) return 3;
-            if (target <= 600) return 4;
-            return 5;
-        },
-
         // sends fake video-progress timestamps until Discord marks the quest done
         async VIDEO(q, t, s) {
             // read progress from actual task key, fall back to type name
             let cur = s.progress?.[t.keyName]?.value ?? s.progress?.[t.type]?.value ?? 0;
             let failCount = 0;
-            const speed = this._videoSpeed(t.target);
+            
             Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
 
             const startTime = Date.now();
             let calls = 0;
 
+            // Simulate initial player buffer ping
+            if (cur === 0) {
+                await sleep(rnd(200, 350));
+                cur = 0.2 + (Math.random() * 0.05);
+                try {
+                    await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: Number(cur.toFixed(6)) });
+                    calls++;
+                } catch(e) {Logger.log(`[Video] Initial ping failed: ${e.message}`, 'debug');}
+            }
+
             while (cur < t.target && RUNTIME.running) {
-                cur = Math.min(t.target, cur + speed);
+                // simulate real client polling interval (7-9.5s)
+                const delayMs = rnd(7000, 9500); 
+                await sleep(delayMs);
+                
+                // calculate elapsed time with execution jitter
+                const elapsedSec = (delayMs / 1000) + (Math.random() * 0.02 - 0.01);
+                cur += elapsedSec;
+                
+                // match Discord's 6-decimal float format
+                const payloadTs = Number(Math.min(t.target, cur).toFixed(6));
 
                 try {
-                    const r = await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: cur });
+                    const r = await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: payloadTs });
                     calls++;
                     // sync with server if it reports higher progress
                     const serverVal = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.WATCH_VIDEO?.value;
@@ -684,8 +697,6 @@
                 if (Date.now() - startTime > SYS.MAX_TIME) {
                     return Tasks.failTask(q, t, 'Timeout exceeded');
                 }
-
-                await sleep(1000);
             }
             if (RUNTIME.running) {
                 Logger.log(`[Task] VIDEO "${t.name}" done in ${calls} API calls`, 'debug');
@@ -702,7 +713,7 @@
             const gameData = await this.fetchGameData(t.appId, t.name);
 
             return new Promise(resolve => {
-                const pid = rnd(10000, 50000);
+                const pid = rnd(2500, 12500) * 4;
                 const game = {
                     id: gameData.id, name: gameData.name, icon: gameData.icon,
                     pid, pidPath: [pid], processName: gameData.name, start: Date.now(),
@@ -735,7 +746,9 @@
                     cleaned = true;
                     clearTimeout(safetyTimer);
                     try { cleanupHook(); } catch (e) { Logger.log(`[Task] Cleanup: ${e.message}`, 'debug'); }
-                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
+                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) {
+                        Logger.log(`[Dispatcher] Unsubscribe failed: ${e.message}`, 'debug'); 
+                    }
                     RUNTIME.cleanups.delete(finish);
                 };
 
@@ -857,7 +870,7 @@
                 if (Date.now() - startTime > SYS.MAX_TIME) {
                     return Tasks.failTask(q, t, 'Timeout exceeded');
                 }
-                await sleep(20000);
+                await sleep(rnd(19000, 22000));
             }
             if (RUNTIME.running && cur >= t.target) Tasks.finish(q, t);
         },
@@ -1059,36 +1072,7 @@
                     return q instanceof Map ? [...q.values()] : Object.values(q);
                 };
 
-                let quests = getQuests();
-
-                const incomplete = quests.filter(q =>
-                    !q.userStatus?.completedAt
-                    && new Date(q.config?.expiresAt).getTime() > Date.now()
-                    && q.id !== CONST.ID
-                    && !Tasks.skipped.has(q.id)
-                );
-
-                const toEnroll = incomplete.filter(q => !q.userStatus?.enrolledAt);
-
-                if (toEnroll.length > 0) {
-                    Logger.log(`[Enroll] Discovering and enrolling in ${toEnroll.length} new quests...`, 'warn');
-                    for (const q of toEnroll) {
-                        if (!RUNTIME.running) break;
-                        try {
-                            await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 1 });
-                        } catch (e) {
-                            const questName = q.config?.messages?.questName ?? q.id;
-                            if (ErrorHandler.isSkippableQuest(e)) {
-                                Tasks.skipped.add(q.id);
-                                Logger.log(`[Enroll] "${questName}" unavailable (HTTP ${e.status}). Skipped.`, 'warn');
-                            } else {
-                                Logger.log(`[Enroll] Failed for "${questName}": ${e?.message ?? e}`, 'err');
-                            }
-                        }
-                    }
-                    await sleep(1500);  // wait for Discord DB to register enrollment
-                    quests = getQuests();
-                }
+                const quests = getQuests();
 
                 const active = quests.filter(q =>
                     !q.userStatus?.completedAt
@@ -1134,7 +1118,26 @@
 
                         Logger.updateTask(tInfo.id, { name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target, status: "QUEUE" });
 
-                        const taskFunc = () => {
+                        const taskFunc = async () => {
+                            // enrollment immediately before execution
+                            if (!q.userStatus?.enrolledAt) {
+                                Logger.log(`[Enroll] Accepting quest: ${tInfo.name}`, 'info');
+                                try {
+                                    await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 11, is_targeted: false });
+                                    // delay between accepting the quest and starting it
+                                    await sleep(rnd(800, 1500)); 
+                                } catch (e) {
+                                    const err = ErrorHandler.classify(e);
+                                    if (ErrorHandler.isSkippableQuest(e)) {
+                                        Tasks.skipped.add(q.id);
+                                        Logger.log(`[Enroll] ${tInfo.name} unavailable (${err.status}). Skipping.`, 'warn');
+                                    } else {
+                                        Logger.log(`[Enroll] Failed for ${tInfo.name}: ${err.message}`, 'err');
+                                    }
+                                    return Tasks.failTask(q, tInfo, `Enrollment failed`);
+                                }
+                            }
+
                             if (type === "WATCH_VIDEO") return Tasks.VIDEO(q, tInfo, q.userStatus);
                             if (type === "ACHIEVEMENT") return Tasks.ACHIEVEMENT(q, tInfo);
                             const runner = type === "STREAM" ? Tasks.STREAM : (type === "ACTIVITY" ? Tasks.ACTIVITY : Tasks.GAME);
@@ -1152,8 +1155,8 @@
 
                 if (totalTasks > 0) {
                     Logger.log(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
-                    const pGames = runConcurrent(queues.game, CONFIG.GAME_CONCURRENCY);
-                    const pVideos = runConcurrent(queues.video, CONFIG.VIDEO_CONCURRENCY);
+                    const pGames = runConcurrent(queues.game, 1);
+                    const pVideos = runConcurrent(queues.video, 1);
                     await Promise.all([pGames, pVideos]);
                 } else {
                     if (active.length === 0) { Logger.log('[System] All available quests are completed!', 'success'); break; }
