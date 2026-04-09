@@ -433,10 +433,12 @@
                         
                         Logger.log(`[Network] Retry ${req.attempts}/${SYS.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s (HTTP ${err.status})`, 'warn');
                         
+                        const retryJitter = rnd(200, 800);
+
                         if (isGlobal) {
                             // Freeze queue on global rate limits to prevent API abuse
                             this.queue.unshift(req);
-                            await sleep(delay + 500);
+                            await sleep(delay + retryJitter);
                         } else {
                             // Non-blocking retry for endpoint-specific limits
                             setTimeout(() => {
@@ -444,7 +446,7 @@
                                     this.queue.push(req);
                                     this.process();
                                 }
-                            }, delay + 500);
+                            }, delay + retryJitter);
                         }
                     } else if (err.isClientError) {
                         Logger.log(`[Network] HTTP ${err.status}: ${req.url}`, 'debug');
@@ -455,7 +457,7 @@
                     }
                 }
                 
-                await sleep(1500); // delay between API calls
+                await sleep(rnd(1200, 1800)); // delay between API calls
             }
             this.processing = false;
         }
@@ -887,6 +889,8 @@
 
             if (CONFIG.TRY_TO_CLAIM_REWARD) {
                 try {
+                    await sleep(rnd(2500, 6000));
+                    if (!RUNTIME.running) return;
                     // optimistic claim — try without captcha, show button if challenged
                     const claimRes = await this.claimReward(q.id);
                     
@@ -1046,7 +1050,7 @@
             const p = task().finally(() => executing.delete(p));
             executing.add(p);
             
-            await sleep(500); // stagger initialization to avoid API bursts
+            await sleep(rnd(1500, 4000)); // stagger initialization to avoid API bursts
             
             if (executing.size >= limit) {
                 await Promise.race(executing);
@@ -1160,12 +1164,12 @@
                     await Promise.all([pGames, pVideos]);
                 } else {
                     if (active.length === 0) { Logger.log('[System] All available quests are completed!', 'success'); break; }
-                    else await sleep(5000);  // idle loop wait
+                    else await sleep(rnd(4000, 6000));  // idle loop wait
                 }
 
                 if (!RUNTIME.running) break;
                 Logger.log(`[Cycle] Loop #${loopCount} complete. Waiting before rescan...`, 'info');
-                await sleep(3000);
+                await sleep(rnd(2500, 4500));
                 loopCount++;
 
             } catch (cycleError) {
