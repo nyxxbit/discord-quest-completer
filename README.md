@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.3
+**Auto-complete every Discord Quest in seconds** &mdash; v4.4
 
-[![Version](https://img.shields.io/badge/v4.3-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.4-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -23,7 +23,7 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 - **Completes ALL quest types** &mdash; Video, Game, Stream, Activity, and the new Achievement quests
 - **Auto-claiming** &mdash; Claim rewards directly from the dashboard. Tries to claim automatically (if enabled), or provides a smart interactive button if captcha is needed
 - **Resilient module loader** &mdash; finds Discord stores by class name, not minified paths. Survives Discord updates
-- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, adaptive video speed. Distinguishes between global and endpoint limits, non-blocking retries
+- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, randomized polling intervals. Distinguishes between global and endpoint limits, non-blocking retries
 - **Fault-tolerant execution** &mdash; One failed quest won't break the queue (`Promise.allSettled`)
 - **Zero setup** &mdash; single paste into the console. No Node.js, no npm, no extensions
 
@@ -61,12 +61,12 @@ Restart Discord.
 Orion extracts Discord's internal webpack stores (`QuestStore`, `RunStore`, `Dispatcher`, etc.) and uses them to spoof game processes, send fake video progress, and dispatch heartbeat signals &mdash; all through Discord's own authenticated API client.
 
 ```
-QuestStore → filter incomplete → auto-enroll → dispatch tasks → poll progress → auto-claim → done
+QuestStore → filter incomplete → JIT enroll → dispatch tasks → poll progress → auto-claim → done
 ```
 
 | Quest type | What Orion does |
 |------------|----------------|
-| **Video** | Sends fake `video-progress` timestamps with adaptive speed (6-22 API calls instead of 180) |
+| **Video** | Sends fake `video-progress` timestamps with natural 7-9.5s polling intervals and precise float payloads |
 | **Game** | Injects a spoofed process into `RunStore` with real metadata from Discord's app registry |
 | **Stream** | Patches `StreamStore.getStreamerActiveStreamMetadata` with synthetic stream data |
 | **Activity** | Heartbeats against a voice channel to simulate participation |
@@ -105,8 +105,6 @@ Tweak before pasting. Timing values, intervals, and sensitive limits are now har
 const CONFIG = {
     TRY_TO_CLAIM_REWARD: false,  // disable auto-claim to avoid captcha popups
     HIDE_ACTIVITY: false,        // suppress "Playing..." from friends list
-    GAME_CONCURRENCY: 1,         // >1 risks detection and ban, keep at 1
-    VIDEO_CONCURRENCY: 2,        // parallel video tasks
     MAX_LOG_ITEMS: 60,           // UI log limit
 };
 ```
@@ -140,7 +138,7 @@ index.js
 ├─ Patcher                     RunStore / StreamStore monkey-patching
 ├─ Tasks                       VIDEO, GAME, STREAM, ACTIVITY, ACHIEVEMENT handlers
 ├─ loadModules()               resilient webpack extraction via constructor.displayName
-└─ main()                      enroll → discover → execute → claim → loop
+└─ main()                      discover → JIT enroll → execute → claim → loop
 ```
 
 ### Module detection
@@ -150,6 +148,14 @@ Unlike other scripts that break on every Discord update, Orion finds stores by t
 ---
 
 ## Changelog
+
+### v4.4
+- **JIT enrollment** &mdash; Quests enroll one at a time right before execution instead of in bulk, eliminating mass-enrollment detection vectors
+- **Natural video polling** &mdash; Replaced static 1s intervals with 7&ndash;9.5s polling using 6-decimal float timestamps that match native Chromium player behavior
+- **Randomized delays** &mdash; All fixed-interval API calls now use randomized timing ranges to break predictable patterns
+- **Correct Windows PIDs** &mdash; Fake game process IDs generated as multiples of 4 to comply with Windows NT kernel architecture
+- **Sequential execution** &mdash; Both game and video tasks now run sequentially (concurrency&nbsp;=&nbsp;1) to avoid parallel request spikes
+- **Proper cleanup** &mdash; Removes `#orion-styles` element on shutdown, debug logging for previously silent catch blocks
 
 ### v4.3
 - **GO TO QUESTS button** &mdash; Achievement quests in `RUNNING` state now show an `ACTION REQUIRED` status with a navigation button that uses Discord's native router (`transitionTo('/quest-home')`) to jump straight to the quest page
