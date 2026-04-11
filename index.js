@@ -5,12 +5,12 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.4 (Enterprise)",
+        VERSION: "v4.5 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
-        TRY_TO_CLAIM_REWARD: false,     // disable auto-claim to avoid captcha popups
+        TRY_TO_CLAIM_REWARD: false,     // overridden by quest picker UI toggle
         HIDE_ACTIVITY: false,           // suppress RPC status from friends list
         MAX_LOG_ITEMS: 60               // UI log limit
     };
@@ -24,9 +24,11 @@
     });
 
     // mutable runtime state lives here, CONFIG stays read-only
-    const RUNTIME = { 
+    const RUNTIME = {
         running: true,
-        cleanups: new Set()             // tracks active event listeners for safe shutdown
+        cleanups: new Set(),            // tracks active event listeners for safe shutdown
+        selectedQuests: null,           // Set of quest IDs chosen by user — null = all
+        autoEnroll: true                // whether to auto-enroll in quests before execution
     };
 
     const ICONS = Object.freeze({
@@ -171,6 +173,34 @@
                 .goto-btn { background: ${CONFIG.THEME}; }
                 .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
                 .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
+                .quest-pick { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #1e1f22; border-radius: 6px; margin-bottom: 6px; cursor: pointer; transition: background 0.15s; border-left: 4px solid ${CONFIG.THEME}; }
+                .quest-pick:hover { background: #2b2d31; }
+                .quest-pick.hidden { display: none; }
+                .quest-pick input[type="checkbox"] { accent-color: ${CONFIG.THEME}; width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
+                .quest-pick-info { flex: 1; overflow: hidden; }
+                .quest-pick-name { font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                .quest-pick-meta { display: flex; gap: 8px; align-items: center; }
+                .quest-pick-type { font-size: 10px; font-weight: 600; color: #949ba4; text-transform: uppercase; letter-spacing: 0.5px; }
+                .quest-pick-reward { font-size: 9px; font-weight: 600; }
+                .quest-pick-section { font-size: 11px; color: #949ba4; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+                .quest-pick-filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+                .reward-filter { padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; cursor: pointer; transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.3px; border-width: 2px; border-style: solid; }
+                .reward-filter.off { background: transparent !important; opacity: 0.4; }
+                .quest-pick-actions { display: flex; gap: 8px; padding: 10px 0; }
+                .quest-pick-btn { flex: 1; padding: 8px; border: none; border-radius: 4px; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; transition: filter 0.2s; }
+                .quest-pick-btn:hover { filter: brightness(1.15); }
+                .quest-pick-btn.start { background: ${CONFIG.SUCCESS}; }
+                .quest-pick-btn.start.disabled { opacity: 0.4; pointer-events: none; }
+                .quest-pick-btn.toggle { background: #4f545c; }
+                .orion-option { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2b2d31; }
+                .orion-option:last-child { border: none; }
+                .orion-option-label { font-size: 12px; color: #b9bbbe; }
+                .orion-toggle { position: relative; width: 36px; height: 20px; cursor: pointer; }
+                .orion-toggle input { opacity: 0; width: 0; height: 0; }
+                .orion-toggle .slider { position: absolute; inset: 0; background: #4f545c; border-radius: 10px; transition: 0.2s; }
+                .orion-toggle .slider::before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+                .orion-toggle input:checked + .slider { background: ${CONFIG.SUCCESS}; }
+                .orion-toggle input:checked + .slider::before { transform: translateX(16px); }
             `;
             document.head.appendChild(style);
 
@@ -643,7 +673,7 @@
         // sends fake video-progress timestamps until Discord marks the quest done
         async VIDEO(q, t, s) {
             // read progress from actual task key, fall back to type name
-            let cur = s.progress?.[t.keyName]?.value ?? s.progress?.[t.type]?.value ?? 0;
+            let cur = s?.progress?.[t.keyName]?.value ?? s?.progress?.[t.type]?.value ?? 0;
             let failCount = 0;
             
             Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
@@ -780,12 +810,58 @@
         },
 
         // ACHIEVEMENT_IN_ACTIVITY — target is usually 1 (a milestone, not seconds).
-        // These require actually joining the Discord Activity and earning the achievement.
-        // We subscribe to heartbeat events and wait for Discord to report progress,
-        // since faking the achievement server-side isn't possible via API alone.
+        // First tries active heartbeat spoofing (same as ACTIVITY handler).
+        // If Discord rejects with 4xx, falls back to passive event monitoring.
         async ACHIEVEMENT(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING" });
+
+            // attempt active heartbeat spoofing
+            let chan = null;
+            try {
+                chan = Mods.ChanStore?.getSortedPrivateChannels()?.[0]?.id
+                    ?? Object.values(Mods.GuildChanStore?.getAllGuilds() ?? {}).find(g => g?.VOCAL?.length)?.VOCAL?.[0]?.channel?.id;
+            } catch (e) { Logger.log(`[Achievement] Channel lookup: ${e.message}`, 'debug'); }
+
+            if (chan) {
+                Logger.log(`[Task] Attempting heartbeat spoofing for "${t.name}"...`, 'info');
+                const key = `call:${chan}:${rnd(1000, 9999)}`;
+                let cur = 0;
+                let failCount = 0;
+
+                while (cur < t.target && RUNTIME.running) {
+                    try {
+                        const r = await Traffic.enqueue(`/quests/${q.id}/heartbeat`, { stream_key: key, terminal: false });
+                        cur = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.ACHIEVEMENT_IN_ACTIVITY?.value ?? cur;
+                        Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur, max: t.target, status: "RUNNING" });
+                        failCount = 0;
+
+                        if (cur >= t.target) {
+                            try { await Traffic.enqueue(`/quests/${q.id}/heartbeat`, { stream_key: key, terminal: true }); }
+                            catch (_) { }
+                            break;
+                        }
+                    } catch (e) {
+                        failCount++;
+                        const err = ErrorHandler.classify(e);
+                        if (err.isClientError) {
+                            Logger.log(`[Achievement] Heartbeat rejected (HTTP ${err.status}). Falling back to passive mode.`, 'warn');
+                            break;
+                        }
+                        if (failCount >= SYS.MAX_TASK_FAILURES) {
+                            Logger.log(`[Achievement] Too many failures. Falling back to passive mode.`, 'warn');
+                            break;
+                        }
+                    }
+                    await sleep(rnd(19000, 22000));
+                }
+
+                if (cur >= t.target && RUNTIME.running) return Tasks.finish(q, t);
+            }
+
+            // fallback: passive mode — wait for user to complete the activity manually
+            if (!RUNTIME.running) return;
             Logger.log(`[Task] Action required: Join Activity to earn "${t.name}"`, 'warn');
+            Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING", actionRequired: true });
 
             return new Promise(resolve => {
                 let cleaned = false;
@@ -800,7 +876,7 @@
                 };
 
                 safetyTimer = setTimeout(() => {
-                    if (RUNTIME.running) Tasks.failTask(q, t, 'Timeout - achievement not earned manually');
+                    if (RUNTIME.running) Tasks.failTask(q, t, 'Timeout - achievement not earned');
                     finish();
                     resolve();
                 }, SYS.MAX_TIME);
@@ -1061,20 +1137,154 @@
         return Promise.allSettled(executing);
     }
 
+    const REWARD_META = { 1: { label: "In-Game Item", color: "#e67e22" }, 3: { label: "Avatar Decoration", color: "#a358f2" }, 4: { label: "Orbs", color: CONFIG.THEME } };
+    const REWARD_FALLBACK = { label: "Other", color: "#4f545c" };
+
+    function showQuestPicker(quests) {
+        return new Promise(resolve => {
+            const body = document.getElementById('orion-body');
+            const incomplete = quests.filter(q =>
+                !q.userStatus?.completedAt
+                && new Date(q.config?.expiresAt).getTime() > Date.now()
+                && q.id !== CONST.ID
+            );
+
+            if (!incomplete.length) return resolve({ selected: null, options: {} });
+
+            const items = incomplete.map(q => {
+                const cfg = q.config?.taskConfig ?? q.config?.taskConfigV2;
+                const td = cfg?.tasks ? Tasks.detectType(cfg, q.config?.application?.id) : null;
+                const rw = q.config?.rewardsConfig?.rewards?.[0];
+                return {
+                    id: q.id,
+                    name: q.config?.messages?.questName ?? "Unknown Quest",
+                    type: td ? (td.type === "WATCH_VIDEO" ? "VIDEO" : td.type) : "UNKNOWN",
+                    rt: rw?.type ?? 0,
+                    reward: rw?.messages?.name ?? "Unknown"
+                };
+            });
+
+            const rewardTypes = [...new Set(items.map(q => q.rt))].sort();
+            const meta = rt => REWARD_META[rt] ?? REWARD_FALLBACK;
+
+            body.innerHTML = `
+                <div style="padding: 6px 12px 0;">
+                    <div class="quest-pick-section">Filter by reward</div>
+                    <div class="quest-pick-filters">
+                        ${rewardTypes.map(rt => {
+                            const m = meta(rt);
+                            return `<button class="reward-filter" data-rt="${rt}" style="border-color:${m.color};background:${m.color}22;color:${m.color};">${m.label} (${items.filter(q => q.rt === rt).length})</button>`;
+                        }).join('')}
+                    </div>
+                    <div id="orion-quest-list" style="max-height: 180px; overflow-y: auto;">
+                        ${items.map(q => {
+                            const c = meta(q.rt).color;
+                            return `<label class="quest-pick" style="border-left-color:${c};" data-rt="${q.rt}">
+                                <input type="checkbox" checked data-qid="${q.id}">
+                                <div class="quest-pick-info">
+                                    <div class="quest-pick-name">${q.name}</div>
+                                    <div class="quest-pick-meta">
+                                        <span class="quest-pick-type">${q.type}</span>
+                                        <span class="quest-pick-reward" style="color:${c};">${q.reward}</span>
+                                    </div>
+                                </div>
+                            </label>`;
+                        }).join('')}
+                    </div>
+                    <div style="padding: 8px 0 2px;">
+                        <div class="quest-pick-section">Options</div>
+                        <div class="orion-option">
+                            <span class="orion-option-label">Auto-enroll in quests</span>
+                            <label class="orion-toggle"><input type="checkbox" id="opt-enroll" checked><span class="slider"></span></label>
+                        </div>
+                        <div class="orion-option">
+                            <span class="orion-option-label">Auto-claim rewards</span>
+                            <label class="orion-toggle"><input type="checkbox" id="opt-claim"><span class="slider"></span></label>
+                        </div>
+                    </div>
+                    <div class="quest-pick-actions">
+                        <button class="quest-pick-btn toggle" id="orion-toggle-all">DESELECT ALL</button>
+                        <button class="quest-pick-btn start" id="orion-start-btn">${ICONS.BOLT} START (${items.length})</button>
+                    </div>
+                </div>
+            `;
+
+            const $ = sel => body.querySelector(sel);
+            const $$ = sel => body.querySelectorAll(sel);
+
+            const syncStartBtn = () => {
+                const n = $$('input[data-qid]:checked').length;
+                const btn = $('#orion-start-btn');
+                btn.innerHTML = `${ICONS.BOLT} START (${n})`;
+                btn.classList.toggle('disabled', n === 0);
+            };
+
+            $$('input[data-qid]').forEach(cb => cb.addEventListener('change', syncStartBtn));
+
+            // reward filter toggles
+            const filters = Object.fromEntries(rewardTypes.map(rt => [rt, true]));
+            $$('.reward-filter').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const rt = Number(btn.dataset.rt);
+                    filters[rt] = !filters[rt];
+                    btn.classList.toggle('off', !filters[rt]);
+                    $$(`.quest-pick[data-rt="${rt}"]`).forEach(card => {
+                        card.classList.toggle('hidden', !filters[rt]);
+                        card.querySelector('input').checked = filters[rt];
+                    });
+                    syncStartBtn();
+                });
+            });
+
+            // select/deselect all
+            let allOn = true;
+            $('#orion-toggle-all').addEventListener('click', () => {
+                allOn = !allOn;
+                $$('.quest-pick').forEach(c => { c.classList.toggle('hidden', !allOn); c.querySelector('input').checked = allOn; });
+                $$('.reward-filter').forEach(b => { filters[Number(b.dataset.rt)] = allOn; b.classList.toggle('off', !allOn); });
+                $('#orion-toggle-all').textContent = allOn ? 'DESELECT ALL' : 'SELECT ALL';
+                syncStartBtn();
+            });
+
+            // start
+            $('#orion-start-btn').addEventListener('click', () => {
+                const selected = new Set();
+                $$('input[data-qid]:checked').forEach(cb => selected.add(cb.dataset.qid));
+                const options = {
+                    autoEnroll: $('#opt-enroll').checked,
+                    autoClaim: $('#opt-claim').checked
+                };
+                body.innerHTML = '<div style="text-align:center; padding:30px; color:#949ba4; font-size:12px">Starting...</div>';
+                resolve({ selected, options });
+            });
+        });
+    }
+
     async function main() {
         Logger.init();
         if (!loadModules()) return Logger.log('[System] Failed to load Discord modules. Aborting.', 'err');
+
+        // show quest picker and wait for user selection
+        const getQuests = () => {
+            const q = Mods.QuestStore.quests;
+            return q instanceof Map ? [...q.values()] : Object.values(q);
+        };
+
+        const { selected, options } = await showQuestPicker(getQuests());
+        if (!RUNTIME.running) return;
+
+        if (selected !== null) {
+            RUNTIME.selectedQuests = selected;
+            CONFIG.TRY_TO_CLAIM_REWARD = options.autoClaim;
+            RUNTIME.autoEnroll = options.autoEnroll;
+            Logger.log(`[System] ${selected.size} quest(s) selected. Auto-enroll: ${options.autoEnroll ? 'ON' : 'OFF'}, Auto-claim: ${options.autoClaim ? 'ON' : 'OFF'}`, 'info');
+        }
 
         let loopCount = 1;
 
         while (RUNTIME.running) {
             try {
                 Logger.log(`[Cycle] Starting loop #${loopCount}...`, 'info');
-
-                const getQuests = () => {
-                    const q = Mods.QuestStore.quests;
-                    return q instanceof Map ? [...q.values()] : Object.values(q);
-                };
 
                 const quests = getQuests();
 
@@ -1083,6 +1293,7 @@
                     && new Date(q.config?.expiresAt).getTime() > Date.now()
                     && q.id !== CONST.ID
                     && !Tasks.skipped.has(q.id)
+                    && (!RUNTIME.selectedQuests || RUNTIME.selectedQuests.has(q.id))
                 );
 
                 if (!active.length) { Logger.log('[System] All available quests are completed!', 'success'); break; }
@@ -1123,13 +1334,16 @@
                         Logger.updateTask(tInfo.id, { name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target, status: "QUEUE" });
 
                         const taskFunc = async () => {
-                            // enrollment immediately before execution
+                            // JIT enrollment — only if auto-enroll is enabled
                             if (!q.userStatus?.enrolledAt) {
+                                if (RUNTIME.autoEnroll === false) {
+                                    Logger.log(`[Enroll] Skipped "${tInfo.name}" (auto-enroll disabled).`, 'debug');
+                                    return;
+                                }
                                 Logger.log(`[Enroll] Accepting quest: ${tInfo.name}`, 'info');
                                 try {
                                     await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 11, is_targeted: false });
-                                    // delay between accepting the quest and starting it
-                                    await sleep(rnd(800, 1500)); 
+                                    await sleep(rnd(800, 1500));
                                 } catch (e) {
                                     const err = ErrorHandler.classify(e);
                                     if (ErrorHandler.isSkippableQuest(e)) {

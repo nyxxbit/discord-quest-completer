@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.4
+**Auto-complete every Discord Quest in seconds** &mdash; v4.5
 
-[![Version](https://img.shields.io/badge/v4.4-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.5-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -99,11 +99,17 @@ You can configure Orion's claiming behavior via the `TRY_TO_CLAIM_REWARD` settin
 
 ## Configuration
 
-Tweak before pasting. Timing values, intervals, and sensitive limits are now hardcoded internally to prevent accidental breakage.
+Most settings are now configurable through the **quest picker UI** that appears before the script starts:
+
+- **Reward filters** &mdash; Toggle quests by reward type (Orbs, Avatar Decorations, In-Game Items)
+- **Quest checkboxes** &mdash; Select/deselect individual quests
+- **Auto-enroll** &mdash; Automatically accept quests before running them (default: ON)
+- **Auto-claim** &mdash; Attempt to claim rewards on completion (default: OFF to avoid captcha)
+
+Advanced settings can still be tweaked in the `CONFIG` object before pasting:
 
 ```js
 const CONFIG = {
-    TRY_TO_CLAIM_REWARD: false,  // disable auto-claim to avoid captcha popups
     HIDE_ACTIVITY: false,        // suppress "Playing..." from friends list
     MAX_LOG_ITEMS: 60,           // UI log limit
 };
@@ -148,6 +154,11 @@ Unlike other scripts that break on every Discord update, Orion finds stores by t
 ---
 
 ## Changelog
+
+### v4.5
+- **Quest picker UI** &mdash; Script no longer starts immediately. A visual quest picker shows all available quests with checkboxes, color-coded by reward type (Orbs, Avatar Decorations, In-Game Items). Filter entire reward categories with one click, select/deselect individual quests, then hit START
+- **Options panel** &mdash; Toggle auto-enroll and auto-claim directly from the picker UI before starting. No more editing CONFIG to control these behaviors
+- **Reward type filters** &mdash; Pill buttons at the top let you enable/disable entire reward categories. Disabling "Orbs" hides and unchecks all Orb quests instantly
 
 ### v4.4
 - **JIT enrollment** &mdash; Quests enroll one at a time right before execution instead of in bulk, eliminating mass-enrollment detection vectors
