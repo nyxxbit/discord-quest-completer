@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.5.1 (Enterprise)",
+        VERSION: "v4.5.2 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1210,7 +1210,7 @@
             `;
 
             const $ = sel => body.querySelector(sel);
-            const $$ = sel => body.querySelectorAll(sel);
+            const $$ = sel => [...body.querySelectorAll(sel)];
 
             const syncStartBtn = () => {
                 const n = $$('input[data-qid]:checked').length;

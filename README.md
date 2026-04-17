@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.5.1
+**Auto-complete every Discord Quest in seconds** &mdash; v4.5.2
 
-[![Version](https://img.shields.io/badge/v4.5.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.5.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -154,6 +154,9 @@ Unlike other scripts that break on every Discord update, Orion finds stores by t
 ---
 
 ## Changelog
+
+### v4.5.2
+- **Fix NodeList error** &mdash; `$$` now returns a real Array so `.every()` works on visible quest cards. Resolves `TypeError: visible.every is not a function` when clicking (De)select All
 
 ### v4.5.1
 - **Fix (De)select All** &mdash; The toggle button now correctly checks/unchecks visible quest checkboxes without hiding them. Reward filters remain independent. Button label syncs with actual checkbox state
