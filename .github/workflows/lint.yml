@@ -1,4 +1,4 @@
-name: Lint
+name: Lint & Syntax
 
 on:
   push:
@@ -15,7 +15,26 @@ on:
       - ".github/workflows/lint.yml"
 
 jobs:
+  syntax:
+    name: Syntax check (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Syntax check
+        run: node --check index.js
+
   lint:
+    name: ESLint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -25,8 +44,23 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Syntax check
-        run: node --check index.js
-
       - name: ESLint
         run: npx --yes eslint@9 index.js
+
+  size:
+    name: Bundle size report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Report index.js size
+        run: |
+          SIZE=$(wc -c < index.js)
+          LINES=$(wc -l < index.js)
+          GZIP=$(gzip -c index.js | wc -c)
+          echo "## index.js metrics" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------:|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines  | $LINES |" >> $GITHUB_STEP_SUMMARY
+          echo "| Bytes  | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gzipped| $GZIP |" >> $GITHUB_STEP_SUMMARY

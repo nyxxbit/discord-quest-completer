@@ -151,6 +151,14 @@ index.js
 
 Unlike other scripts that break on every Discord update, Orion finds stores by their **class name** (`QuestStore`, `RunningGameStore`, etc.) via `constructor.displayName`. The Dispatcher is found by structural signature (`_subscriptions` + `subscribe` + `dispatch`), and the API client by its unique `.del` method. No hardcoded minified paths.
 
+For a full internal tour of the script, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Contributing
+
+Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for the checklist and code style. Use the issue templates when reporting bugs or requesting features.
+
 ---
 
 ## Changelog

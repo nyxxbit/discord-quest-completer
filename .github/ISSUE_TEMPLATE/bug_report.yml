@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in Orion isn't working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the sections below so we can reproduce and fix it quickly.
+
+  - type: input
+    id: version
+    attributes:
+      label: Orion version
+      description: Shown at the top of the dashboard (e.g. `v4.5.2`).
+      placeholder: "v4.5.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Discord client
+      options:
+        - Stable (desktop)
+        - PTB (desktop)
+        - Canary (desktop)
+        - Browser (web)
+        - Mobile
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug. What did you expect? What happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Paste index.js into the console
+        2. Select quest "..."
+        3. Click START
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Full error text from DevTools (not a screenshot of the console).
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, quest IDs, anything relevant.

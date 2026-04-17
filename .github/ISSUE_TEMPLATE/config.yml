@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the documentation first
+    url: https://github.com/nyxxbit/discord-quest-completer/blob/main/README.md
+    about: Most common questions are answered in the README and ARCHITECTURE docs.
