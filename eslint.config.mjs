@@ -37,6 +37,7 @@ export default [
                 MutationObserver: "readonly",
                 URL: "readonly",
                 URLSearchParams: "readonly",
+                FormData: "readonly",
                 // Discord-injected
                 webpackChunkdiscord_app: "readonly",
             },
