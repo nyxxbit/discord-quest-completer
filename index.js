@@ -5,12 +5,11 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.5.2 (Enterprise)",
+        VERSION: "v4.5.3 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
         ERR: "#f04747",
-        TRY_TO_CLAIM_REWARD: false,     // overridden by quest picker UI toggle
         HIDE_ACTIVITY: false,           // suppress RPC status from friends list
         MAX_LOG_ITEMS: 60               // UI log limit
     };
@@ -27,8 +26,8 @@
     const RUNTIME = {
         running: true,
         cleanups: new Set(),            // tracks active event listeners for safe shutdown
-        selectedQuests: null,           // Set of quest IDs chosen by user — null = all
-        autoEnroll: true                // whether to auto-enroll in quests before execution
+        autoEnroll: true,               // whether to auto-enroll in quests before execution
+        autoClaim: false                // whether to try auto-claiming quest rewards
     };
 
     const ICONS = Object.freeze({
@@ -112,7 +111,7 @@
         init() {
             const oldUI = document.getElementById('orion-ui'); if (oldUI) oldUI.remove();
             const oldStyle = document.getElementById('orion-styles'); if (oldStyle) oldStyle.remove();
-            
+
             const savedPos = Storage.load('pos') ?? { top: '32px', left: 'auto', right: '20px' };
 
             const style = document.createElement('style');
@@ -136,7 +135,7 @@
                 .ctrl-btn:hover { opacity: 1; }
                 .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px 2px 2px; border-radius: 4px; }
                 .ctrl-stop:hover { background: rgba(240, 71, 71, 0.1); }
-                #orion-body { padding: 12px 8px 12px 12px; max-height: 400px; overflow-y: auto; flex-grow: 1; scrollbar-gutter: stable; }
+                #orion-body { padding: 12px 8px 12px 12px; max-height: 450px; overflow-y: auto; flex-grow: 1; scrollbar-gutter: stable; }
                 #orion-ui ::-webkit-scrollbar { width: 4px; height: 4px; }
                 #orion-ui ::-webkit-scrollbar-track { background: none; }
                 #orion-ui ::-webkit-scrollbar-thumb { background: #5e5f69; border-radius: 4px; }
@@ -154,12 +153,17 @@
                 .task-top { display: flex; justify-content: space-between; margin-bottom: 4px; }
                 .task-name { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 190px; color: #fff; }
                 .task-status { font-size: 10px; font-weight: 700; color: #949ba4; text-transform: uppercase; }
-                .task-meta { display: flex; justify-content: space-between; font-size: 11px; color: #b9bbbe; margin-bottom: 6px; }
+                .task-meta { display: flex; justify-content: space-between; font-size: 10px; font-weight: 700; color: #b9bbbe; margin-bottom: 6px; }
                 .progress-track { height: 6px; background: #2b2d31; border-radius: 3px; overflow: hidden; }
                 .progress-fill { height: 100%; background: linear-gradient(90deg, ${CONFIG.THEME}, #a358f2); width: 0%; transition: width 0.3s; background-image: linear-gradient(45deg,rgba(255,255,255,.1) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.1) 50%,rgba(255,255,255,.1) 75%,transparent 75%,transparent); background-size: 20px 20px; animation: stripe 1s linear infinite; }
                 .task-card.done .progress-fill { background: ${CONFIG.SUCCESS}; animation: none; }
                 .task-card.failed .progress-fill { background: ${CONFIG.ERR}; width: 100% !important; animation: none; opacity: 0.3; }
                 .task-card.pending .progress-fill { width: 0% !important; animation: none; }
+                .claim-btn, .goto-btn { padding: 4px 10px; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: filter 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
+                .claim-btn { background: ${CONFIG.SUCCESS}; }
+                .goto-btn { background: ${CONFIG.THEME}; }
+                .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
+                .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
                 #orion-logs { padding: 10px 12px; background: #0e0f10; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; color: #949ba4; height: 140px; overflow-y: auto; border-top: 1px solid #2b2d31; scroll-behavior: smooth; }
                 .log-item { margin-bottom: 4px; display: flex; gap: 8px; line-height: 1.4; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 2px; }
                 .log-item:last-of-type { border: none; }
@@ -168,39 +172,35 @@
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
-                .claim-btn, .goto-btn { padding: 4px 10px; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: filter 0.2s ease, background 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
-                .claim-btn { background: ${CONFIG.SUCCESS}; }
-                .goto-btn { background: ${CONFIG.THEME}; }
-                .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
-                .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
-                .quest-pick { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #1e1f22; border-radius: 6px; margin-bottom: 6px; cursor: pointer; transition: background 0.15s; border-left: 4px solid ${CONFIG.THEME}; }
-                .quest-pick:hover { background: #2b2d31; }
-                .quest-pick.hidden { display: none; }
-                .quest-pick input[type="checkbox"] { accent-color: ${CONFIG.THEME}; width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
-                .quest-pick-info { flex: 1; overflow: hidden; }
-                .quest-pick-name { font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-                .quest-pick-meta { display: flex; gap: 8px; align-items: center; }
-                .quest-pick-type { font-size: 10px; font-weight: 600; color: #949ba4; text-transform: uppercase; letter-spacing: 0.5px; }
-                .quest-pick-reward { font-size: 9px; font-weight: 600; }
-                .quest-pick-section { font-size: 11px; color: #949ba4; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-                .quest-pick-filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
-                .reward-filter { padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; cursor: pointer; transition: all 0.15s; text-transform: uppercase; letter-spacing: 0.3px; border-width: 2px; border-style: solid; }
-                .reward-filter.off { background: transparent !important; opacity: 0.4; }
-                .quest-pick-actions { display: flex; gap: 8px; padding: 10px 0; }
-                .quest-pick-btn { flex: 1; padding: 8px; border: none; border-radius: 4px; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; text-transform: uppercase; letter-spacing: 0.5px; transition: filter 0.2s; }
-                .quest-pick-btn:hover { filter: brightness(1.15); }
-                .quest-pick-btn.start { background: ${CONFIG.SUCCESS}; }
-                .quest-pick-btn.start.disabled { opacity: 0.4; pointer-events: none; }
-                .quest-pick-btn.toggle { background: #4f545c; }
-                .orion-option { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2b2d31; }
-                .orion-option:last-child { border: none; }
-                .orion-option-label { font-size: 12px; color: #b9bbbe; }
-                .orion-toggle { position: relative; width: 36px; height: 20px; cursor: pointer; }
-                .orion-toggle input { opacity: 0; width: 0; height: 0; }
-                .orion-toggle .slider { position: absolute; inset: 0; background: #4f545c; border-radius: 10px; transition: 0.2s; }
-                .orion-toggle .slider::before { content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
-                .orion-toggle input:checked + .slider { background: ${CONFIG.SUCCESS}; }
-                .orion-toggle input:checked + .slider::before { transform: translateX(16px); }
+                .picker-section-title { font-size: 11px; font-weight: 800; color: #949ba4; margin: 12px 0 8px; letter-spacing: 0.5px; }
+                .reward-filters { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+                .reward-filter, .type-filter { background: rgba(255,255,255,0.05); border: 2px solid; padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; cursor: pointer; transition: 0.2s; }
+                .reward-filter:hover, .type-filter:hover { background: rgba(255,255,255,0.1); filter: brightness(1.2); }
+                .reward-filter.off, .type-filter.off { background: transparent; opacity: 0.4; border-color: #3f4147 !important; color: #80848e !important; }
+                .picker-quest-list { display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; padding-right: 4px; }
+                .quest-pick { display: flex; gap: 12px; padding: 10px; background: #1e1f22; border-radius: 6px; border: 1px solid #2b2d31; border-left: 4px solid #2b2d31; cursor: pointer; transition: 0.2s; align-items: center; user-select: none; }
+                .quest-pick:hover { border-color: #3f4147; }
+                .quest-checkbox { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
+                .quest-checkbox input { opacity: 0; width: 0; height: 0; position: absolute; }
+                .checkbox-box { position: absolute; top: 0; left: 0; width: 18px; height: 18px; background: #2b2d31; border-radius: 4px; transition: 0.2s; border: 1px solid #3f4147; box-sizing: border-box; }
+                .quest-checkbox input:checked ~ .checkbox-box { background: ${CONFIG.THEME}; border-color: ${CONFIG.THEME}; }
+                .quest-checkbox input:checked ~ .checkbox-box::after { content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+                .picker-options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+                .orion-option { display: flex; justify-content: space-between; align-items: center; background: #1e1f22; padding: 10px 12px; border-radius: 6px; border: 1px solid #2b2d31; }
+                .orion-option-label { font-size: 12px; font-weight: 600; color: #dbdee1; }
+                .orion-toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
+                .orion-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+                .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #80848e; transition: .3s; border-radius: 18px; }
+                .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 2px; bottom: 2px; background-color: white; transition: .3s; border-radius: 50%; }
+                .orion-toggle input:checked + .slider { background-color: ${CONFIG.SUCCESS}; }
+                .orion-toggle input:checked + .slider:before { transform: translateX(14px); }
+                .picker-actions { display: flex; gap: 8px; border-top: 1px solid #2b2d31; margin-top: 8px; padding-top: 12px; }
+                .quest-pick-btn { flex: 1; padding: 10px; border: none; border-radius: 4px; font-size: 12px; font-weight: 800; cursor: pointer; transition: 0.2s; color: #fff; }
+                .quest-pick-btn.start { background: ${CONFIG.SUCCESS}; display: flex; align-items: center; justify-content: center; gap: 6px; }
+                .quest-pick-btn.start:hover { filter: brightness(1.15); }
+                .quest-pick-btn.deselect { background: #4e5058; }
+                .quest-pick-btn.deselect:hover { background: #6d6f78; }
+                .quest-pick-btn.deselect:disabled { background: #3f4147; color: #949ba4; cursor: not-allowed; }
             `;
             document.head.appendChild(style);
 
@@ -250,37 +250,41 @@
 
             document.getElementById('orion-body').addEventListener('click', async (e) => {
                 if (e.target.classList.contains('goto-btn')) {
-                    if (Mods.Router) {
-                        Mods.Router.transitionTo('/quest-home');
-                    };
+                    if (Mods.Router) Mods.Router.transitionTo('/quest-home');
                     return;
                 }
-                
+
                 if (e.target.classList.contains('claim-btn')) {
                     const btn = e.target;
+                    if (btn.disabled) return; // prevent double-clicks
+
                     const questId = btn.getAttribute('data-id');
                     const taskData = this.tasks.get(questId);
-                    
+                    if (!taskData) return;
+
                     btn.innerText = "WAITING...";
+                    btn.disabled = true;
                     btn.style.opacity = "0.5";
-                    btn.style.pointerEvents = "none";
-                    
+                    btn.style.cursor = "not-allowed";
+
+                    // save state so render() respects it
+                    this.updateTask(questId, { ...taskData, claimState: 'WAITING' });
+
                     try {
                         const claimRes = await Tasks.claimReward(questId);
-                        
+
                         if (claimRes?.body?.claimed_at) {
                             btn.innerText = "CLAIMED!";
                             btn.style.background = CONFIG.SUCCESS;
-                            this.log(`[Claim] Reward for "${taskData?.name || 'Quest'}" claimed successfully!`, 'success');
-                            
-                            this.updateTask(questId, { ...taskData, status: "CLAIMED", claimable: false });
+                            this.log(`[Claim] Reward for "${taskData.name}" claimed successfully!`, 'success');
+
+                            this.updateTask(questId, { ...taskData, status: "CLAIMED", claimable: false, claimState: null });
                             setTimeout(() => this.removeTask(questId), 2000);
                         }
                     } catch (err) {
-                        btn.innerText = "CLAIM REWARD";
-                        btn.style.opacity = "1";
-                        btn.style.pointerEvents = "auto";
-                        this.log(`[Claim] Action required for "${taskData?.name || 'Quest'}". Check Discord UI for captcha.`, 'warn');
+                        this.log(`[Claim] Action required for "${taskData.name}". Check Discord UI for captcha.`, 'warn');
+                        // formally update state to FAILED so render() locks it permanently
+                        this.updateTask(questId, { ...taskData, claimState: 'FAILED' });
                     }
                 }
             });
@@ -303,7 +307,7 @@
 
             // safely force-execute all registered task cleanups (unsubscribes/unpatches)
             for (const cleanupFn of RUNTIME.cleanups) {
-                try { cleanupFn(); } catch (e) {this.log(`[Cleanup] ${e.message}`, 'debug');}
+                try { cleanupFn(); } catch (e) { this.log(`[Cleanup] ${e.message}`, 'debug'); }
             }
             RUNTIME.cleanups.clear();
 
@@ -321,16 +325,18 @@
             const isPending = data.status === "PENDING" || data.status === "QUEUE";
             const isDone = data.status === "COMPLETED" || data.status === "CLAIMED";
             const isFailed = data.status === "FAILED";
-            
+
             const newData = { ...oldData, ...data, done: isDone, pending: isPending, failed: isFailed };
             this.tasks.set(id, newData);
 
             // Smart DOM update
-            if (oldData && oldData.status === newData.status && oldData.removing === newData.removing && oldData.claimable === newData.claimable) {
+            if (oldData && oldData.status === newData.status && oldData.removing === newData.removing &&
+                oldData.claimable === newData.claimable && oldData.claimState === newData.claimState &&
+                oldData.actionRequired === newData.actionRequired) {
                 const card = document.getElementById(`orion-task-${id}`);
                 if (card) {
                     const pct = newData.pending || newData.failed ? 0 : Math.min(100, (newData.cur / newData.max) * 100).toFixed(1);
-                    
+
                     const fill = card.querySelector('.progress-fill');
                     if (fill) fill.style.width = `${pct}%`;
 
@@ -341,7 +347,7 @@
                     return;
                 }
             }
-            
+
             this.render();
         },
 
@@ -368,11 +374,12 @@
         },
 
         render() {
+            if (document.getElementById('orion-picker-form')) return;
             const body = document.getElementById('orion-body');
             if (!body) return;
             if (!this.tasks.size) return body.innerHTML = `<div style="text-align:center; padding:30px; color:#949ba4; font-size:12px">Waiting for tasks...</div>`;
-            
-            const sorted =[...this.tasks.entries()].sort((a, b) => {
+
+            const sorted = [...this.tasks.entries()].sort((a, b) => {
                 const ta = a[1], tb = b[1];
                 if (ta.done !== tb.done) return ta.done ? 1 : -1;
                 if (ta.failed !== tb.failed) return ta.failed ? 1 : -1;
@@ -397,15 +404,25 @@
                 else if (t.type === 'ACHIEVEMENT') icon = ICONS.ACTIVITY;
                 else if (t.type?.includes('GAME')) icon = ICONS.GAME;
                 else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
-                
+
                 let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
                 let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
                 const unit = t.type === 'ACHIEVEMENT' ? '' : 's';
-                
+
                 let actionBtn = '';
 
                 if (t.claimable) {
-                    actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
+                    if (t.claimState === 'WAITING') {
+                        actionBtn = `<button class="claim-btn" disabled style="opacity: 0.5; cursor: not-allowed;">WAITING...</button>`;
+                    } else if (t.claimState === 'FAILED') {
+                        actionBtn = `<button class="claim-btn" disabled style="background: #4f545c; opacity: 0.8; cursor: not-allowed;">ACTION REQUIRED</button>`;
+                    } else {
+                        actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
+                    }
+                } else if (t.actionRequired === 'ENROLL') {
+                    statusText = 'ACTION REQUIRED';
+                    progressLabel = 'Accept quest in Discord';
+                    actionBtn = `<button class="goto-btn">GO TO QUESTS</button>`;
                 } else if (t.type === 'ACHIEVEMENT' && t.status === 'RUNNING') {
                     statusText = 'ACTION REQUIRED';
                     progressLabel = 'Please, complete manually';
@@ -414,9 +431,210 @@
 
                 const stateClass = t.done ? 'done' : t.failed ? 'failed' : t.pending ? 'pending' : '';
                 const removingClass = t.removing ? 'removing' : '';
-                
+
                 return `<div id="orion-task-${id}" class="task-card ${stateClass} ${removingClass}"><div class="task-icon">${icon}</div><div class="task-info"><div class="task-top"><div class="task-name" title="${t.name}">${t.name}</div><div class="task-status">${statusText}</div></div><div class="task-meta"><span>${progressLabel}</span><span class="progress-text">${Math.floor(t.cur)} / ${t.max}${unit}</span></div><div class="progress-track"><div class="progress-fill" style="width: ${pct}%"></div></div>${actionBtn}</div></div>`;
             }).join('');
+        },
+
+        showQuestPicker(quests) {
+            return new Promise((resolve) => {
+                const body = document.getElementById('orion-body');
+                const logs = document.getElementById('orion-logs');
+
+                const closePicker = (data) => {
+                    if (logs) logs.style.display = 'block';
+                    resolve(data);
+                };
+
+                if (!body) return closePicker({ selectedQuests: new Set(), autoEnroll: false, autoClaim: false });
+
+                if (logs) logs.style.display = 'none';
+
+                const items = [];
+                const rewardTypes = new Map();
+                const questTypes = new Set();
+
+                const REWARD_META = { 1: { label: "IN-GAME", color: "#e67e22" }, 3: { label: "AVATAR DECORATION", color: "#a358f2" }, 4: { label: "ORBS", color: CONFIG.THEME } };
+                const REWARD_FALLBACK = { label: "OTHER", color: "#4f545c" };
+
+                quests.forEach(q => {
+                    const cfg = q.config?.taskConfig ?? q.config?.taskConfigV2;
+                    if (!cfg?.tasks) return;
+
+                    const typeData = Tasks.detectType(cfg, q.config?.application?.id);
+                    if (!typeData) return;
+
+                    const rw = q.config?.rewardsConfig?.rewards?.[0];
+                    const rewardType = rw?.type ?? 0;
+                    const rewardText = rw?.messages?.name ?? "Unknown Reward";
+
+                    const meta = REWARD_META[rewardType] ?? REWARD_FALLBACK;
+
+                    const displayType = typeData.type === 'WATCH_VIDEO' ? 'VIDEO' : typeData.type;
+                    questTypes.add(displayType);
+
+                    if (!rewardTypes.has(rewardType)) {
+                        rewardTypes.set(rewardType, { label: meta.label, count: 0, type: rewardType, color: meta.color });
+                    }
+                    rewardTypes.get(rewardType).count++;
+
+                    items.push({
+                        id: q.id,
+                        name: q.config?.messages?.questName ?? "Unknown Quest",
+                        type: displayType,
+                        rewardType,
+                        rewardText,
+                        color: meta.color
+                    });
+                });
+
+                if (!items.length) return closePicker({ selectedQuests: new Set(), autoEnroll: false, autoClaim: false });
+
+                const buildCard = (q) => `
+                    <label class="quest-pick" data-rt="${q.rewardType}" data-qt="${q.type}" style="border-left-color: ${q.color};">
+                        <div class="quest-checkbox">
+                            <input type="checkbox" name="quests" value="${q.id}" checked>
+                            <div class="checkbox-box"></div>
+                        </div>
+                        <div class="task-info">
+                            <div class="task-name" title="${q.name}">${q.name}</div>
+                            <div class="task-meta" style="justify-content: flex-start; gap: 8px; margin-top: 2px; margin-bottom: 0;">
+                                <span style="text-transform: uppercase;">${q.type}</span>
+                                <span style="color: ${q.color};">${q.rewardText}</span>
+                            </div>
+                        </div>
+                    </label>`;
+
+                const buildToggle = (name, label, isChecked) => `
+                    <div class="orion-option">
+                        <span class="orion-option-label">${label}</span>
+                        <label class="orion-toggle">
+                            <input type="checkbox" name="${name}" ${isChecked ? 'checked' : ''}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>`;
+
+                body.innerHTML = `
+                    <form id="orion-picker-form">
+                        ${rewardTypes.size > 1 ? `
+                            <div class="picker-section-title">FILTER BY REWARD</div>
+                            <div class="reward-filters">
+                                ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="border-color: ${rt.color}; color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
+                            </div>
+                        ` : ''}
+                        ${questTypes.size > 1 ? `
+                            <div class="picker-section-title">FILTER BY TYPE</div>
+                            <div class="reward-filters">
+                                ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}" style="border-color: #949ba4; color: #949ba4;">${t}</button>`).join('')}
+                            </div>
+                        ` : ''}
+                        
+                        <div id="orion-quest-list" class="picker-quest-list">
+                            ${items.map(buildCard).join('')}
+                        </div>
+                        
+                        <div class="picker-section-title">OPTIONS</div>
+                        <div class="picker-options">
+                            ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
+                            ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
+                        </div>
+                        
+                        <div class="picker-actions">
+                            <button type="button" class="quest-pick-btn deselect" id="select-all-btn">DESELECT ALL</button>
+                            <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} START (${items.length})</button>
+                        </div>
+                    </form>`;
+
+                const form = document.getElementById('orion-picker-form');
+                const selectAllBtn = document.getElementById('select-all-btn');
+                const startBtn = document.getElementById('start-btn');
+
+                const getVisibleCheckboxes = () => Array.from(form.querySelectorAll('.quest-pick input[type="checkbox"]'))
+                    .filter(cb => cb.closest('.quest-pick').style.display !== 'none');
+
+                const syncUI = () => {
+                    const visibleCbs = getVisibleCheckboxes();
+                    const totalChecked = visibleCbs.filter(cb => cb.checked).length;
+
+                    startBtn.innerHTML = `${ICONS.BOLT} START (${totalChecked})`;
+
+                    if (visibleCbs.length === 0) {
+                        selectAllBtn.disabled = true;
+                        selectAllBtn.style.opacity = "0.5";
+                        selectAllBtn.textContent = 'SELECT ALL';
+                    } else {
+                        selectAllBtn.disabled = false;
+                        selectAllBtn.style.opacity = "1";
+                        const allChecked = visibleCbs.every(cb => cb.checked);
+                        selectAllBtn.textContent = allChecked ? 'DESELECT ALL' : 'SELECT ALL';
+                    }
+                };
+
+                form.addEventListener('change', (e) => {
+                    if (e.target.name === 'quests') syncUI();
+                });
+
+                const activeRewards = new Set([...rewardTypes.keys()].map(String));
+                const activeTypes = new Set([...questTypes]);
+
+                const applyFilters = () => {
+                    form.querySelectorAll('.quest-pick').forEach(el => {
+                        const rt = el.getAttribute('data-rt');
+                        const qt = el.getAttribute('data-qt');
+
+                        const isVisible = activeRewards.has(rt) && activeTypes.has(qt);
+                        el.style.display = isVisible ? '' : 'none';
+                    });
+                    syncUI();
+                };
+
+                form.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('reward-filter')) {
+                        e.preventDefault();
+                        const rt = e.target.getAttribute('data-rt');
+                        e.target.classList.toggle('off');
+
+                        if (e.target.classList.contains('off')) activeRewards.delete(rt);
+                        else activeRewards.add(rt);
+
+                        applyFilters();
+                    }
+
+                    if (e.target.classList.contains('type-filter')) {
+                        e.preventDefault();
+                        const qt = e.target.getAttribute('data-qt');
+                        e.target.classList.toggle('off');
+
+                        if (e.target.classList.contains('off')) activeTypes.delete(qt);
+                        else activeTypes.add(qt);
+
+                        applyFilters();
+                    }
+
+                    if (e.target.id === 'select-all-btn') {
+                        e.preventDefault();
+                        const visibleCbs = getVisibleCheckboxes();
+                        if (visibleCbs.length === 0) return;
+
+                        const shouldCheck = !visibleCbs.every(cb => cb.checked);
+                        visibleCbs.forEach(cb => { cb.checked = shouldCheck; });
+                        syncUI();
+                    }
+                });
+
+                form.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const data = new FormData(form);
+
+                    closePicker({
+                        // only quests currently visible in the UI will be executed,
+                        // preventing accidental execution of filtered-out quests
+                        selectedQuests: new Set(getVisibleCheckboxes().filter(cb => cb.checked).map(cb => cb.value)),
+                        autoEnroll: data.has('autoEnroll'),
+                        autoClaim: data.has('autoClaim')
+                    });
+                });
+            });
         }
     };
 
@@ -460,9 +678,9 @@
                         req.attempts++;
                         const delay = (e.body?.retry_after ?? Math.pow(2, req.attempts)) * 1000;
                         const isGlobal = e.body?.global === true;
-                        
+
                         Logger.log(`[Network] Retry ${req.attempts}/${SYS.MAX_RETRIES} in ${(delay / 1000).toFixed(1)}s (HTTP ${err.status})`, 'warn');
-                        
+
                         const retryJitter = rnd(200, 800);
 
                         if (isGlobal) {
@@ -486,7 +704,7 @@
                         req.reject(e);
                     }
                 }
-                
+
                 await sleep(rnd(1200, 1800)); // delay between API calls
             }
             this.processing = false;
@@ -574,8 +792,8 @@
                         assets: null
                     } : null
                 });
-            } catch (e) { 
-                Logger.log(`[RPC Cleanup] ${e.message}`, 'debug'); 
+            } catch (e) {
+                Logger.log(`[RPC Cleanup] ${e.message}`, 'debug');
             }
         },
 
@@ -675,7 +893,7 @@
             // read progress from actual task key, fall back to type name
             let cur = s?.progress?.[t.keyName]?.value ?? s?.progress?.[t.type]?.value ?? 0;
             let failCount = 0;
-            
+
             Logger.updateTask(q.id, { name: t.name, type: "VIDEO", cur, max: t.target, status: "RUNNING" });
 
             const startTime = Date.now();
@@ -688,18 +906,18 @@
                 try {
                     await Traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: Number(cur.toFixed(6)) });
                     calls++;
-                } catch(e) {Logger.log(`[Video] Initial ping failed: ${e.message}`, 'debug');}
+                } catch (e) { Logger.log(`[Video] Initial ping failed: ${e.message}`, 'debug'); }
             }
 
             while (cur < t.target && RUNTIME.running) {
                 // simulate real client polling interval (7-9.5s)
-                const delayMs = rnd(7000, 9500); 
+                const delayMs = rnd(7000, 9500);
                 await sleep(delayMs);
-                
+
                 // calculate elapsed time with execution jitter
                 const elapsedSec = (delayMs / 1000) + (Math.random() * 0.02 - 0.01);
                 cur += elapsedSec;
-                
+
                 // match Discord's 6-decimal float format
                 const payloadTs = Number(Math.min(t.target, cur).toFixed(6));
 
@@ -779,7 +997,7 @@
                     clearTimeout(safetyTimer);
                     try { cleanupHook(); } catch (e) { Logger.log(`[Task] Cleanup: ${e.message}`, 'debug'); }
                     try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) {
-                        Logger.log(`[Dispatcher] Unsubscribe failed: ${e.message}`, 'debug'); 
+                        Logger.log(`[Dispatcher] Unsubscribe failed: ${e.message}`, 'debug');
                     }
                     RUNTIME.cleanups.delete(finish);
                 };
@@ -963,13 +1181,13 @@
                 }
             } catch (e) { Logger.log(`[Notification] ${e.message}`, 'debug'); }
 
-            if (CONFIG.TRY_TO_CLAIM_REWARD) {
+            if (RUNTIME.autoClaim) {
                 try {
                     await sleep(rnd(2500, 6000));
                     if (!RUNTIME.running) return;
                     // optimistic claim — try without captcha, show button if challenged
                     const claimRes = await this.claimReward(q.id);
-                    
+
                     if (claimRes?.body?.claimed_at) {
                         Logger.log(`[Claim] Reward for "${t.name}" claimed automatically!`, 'success');
                         Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
@@ -1119,151 +1337,22 @@
     // run async tasks concurrently up to a specified limit
     async function runConcurrent(tasks, limit) {
         const executing = new Set();
-        
+
         for (const task of tasks) {
             if (!RUNTIME.running) break;
-            
+
             const p = task().finally(() => executing.delete(p));
             executing.add(p);
-            
+
             await sleep(rnd(1500, 4000)); // stagger initialization to avoid API bursts
-            
+
             if (executing.size >= limit) {
                 await Promise.race(executing);
             }
         }
-        
+
         // use allSettled to prevent a single rejection from crashing the batch
         return Promise.allSettled(executing);
-    }
-
-    const REWARD_META = { 1: { label: "In-Game Item", color: "#e67e22" }, 3: { label: "Avatar Decoration", color: "#a358f2" }, 4: { label: "Orbs", color: CONFIG.THEME } };
-    const REWARD_FALLBACK = { label: "Other", color: "#4f545c" };
-
-    function showQuestPicker(quests) {
-        return new Promise(resolve => {
-            const body = document.getElementById('orion-body');
-            const incomplete = quests.filter(q =>
-                !q.userStatus?.completedAt
-                && new Date(q.config?.expiresAt).getTime() > Date.now()
-                && q.id !== CONST.ID
-            );
-
-            if (!incomplete.length) return resolve({ selected: null, options: {} });
-
-            const items = incomplete.map(q => {
-                const cfg = q.config?.taskConfig ?? q.config?.taskConfigV2;
-                const td = cfg?.tasks ? Tasks.detectType(cfg, q.config?.application?.id) : null;
-                const rw = q.config?.rewardsConfig?.rewards?.[0];
-                return {
-                    id: q.id,
-                    name: q.config?.messages?.questName ?? "Unknown Quest",
-                    type: td ? (td.type === "WATCH_VIDEO" ? "VIDEO" : td.type) : "UNKNOWN",
-                    rt: rw?.type ?? 0,
-                    reward: rw?.messages?.name ?? "Unknown"
-                };
-            });
-
-            const rewardTypes = [...new Set(items.map(q => q.rt))].sort();
-            const meta = rt => REWARD_META[rt] ?? REWARD_FALLBACK;
-
-            body.innerHTML = `
-                <div style="padding: 6px 12px 0;">
-                    <div class="quest-pick-section">Filter by reward</div>
-                    <div class="quest-pick-filters">
-                        ${rewardTypes.map(rt => {
-                            const m = meta(rt);
-                            return `<button class="reward-filter" data-rt="${rt}" style="border-color:${m.color};background:${m.color}22;color:${m.color};">${m.label} (${items.filter(q => q.rt === rt).length})</button>`;
-                        }).join('')}
-                    </div>
-                    <div id="orion-quest-list" style="max-height: 180px; overflow-y: auto;">
-                        ${items.map(q => {
-                            const c = meta(q.rt).color;
-                            return `<label class="quest-pick" style="border-left-color:${c};" data-rt="${q.rt}">
-                                <input type="checkbox" checked data-qid="${q.id}">
-                                <div class="quest-pick-info">
-                                    <div class="quest-pick-name">${q.name}</div>
-                                    <div class="quest-pick-meta">
-                                        <span class="quest-pick-type">${q.type}</span>
-                                        <span class="quest-pick-reward" style="color:${c};">${q.reward}</span>
-                                    </div>
-                                </div>
-                            </label>`;
-                        }).join('')}
-                    </div>
-                    <div style="padding: 8px 0 2px;">
-                        <div class="quest-pick-section">Options</div>
-                        <div class="orion-option">
-                            <span class="orion-option-label">Auto-enroll in quests</span>
-                            <label class="orion-toggle"><input type="checkbox" id="opt-enroll" checked><span class="slider"></span></label>
-                        </div>
-                        <div class="orion-option">
-                            <span class="orion-option-label">Auto-claim rewards</span>
-                            <label class="orion-toggle"><input type="checkbox" id="opt-claim"><span class="slider"></span></label>
-                        </div>
-                    </div>
-                    <div class="quest-pick-actions">
-                        <button class="quest-pick-btn toggle" id="orion-toggle-all">DESELECT ALL</button>
-                        <button class="quest-pick-btn start" id="orion-start-btn">${ICONS.BOLT} START (${items.length})</button>
-                    </div>
-                </div>
-            `;
-
-            const $ = sel => body.querySelector(sel);
-            const $$ = sel => [...body.querySelectorAll(sel)];
-
-            const syncStartBtn = () => {
-                const n = $$('input[data-qid]:checked').length;
-                const btn = $('#orion-start-btn');
-                btn.innerHTML = `${ICONS.BOLT} START (${n})`;
-                btn.classList.toggle('disabled', n === 0);
-            };
-
-            const syncToggleLabel = () => {
-                const visible = $$('.quest-pick:not(.hidden)');
-                const allChecked = visible.length > 0 && visible.every(c => c.querySelector('input').checked);
-                $('#orion-toggle-all').textContent = allChecked ? 'DESELECT ALL' : 'SELECT ALL';
-            };
-
-            $$('input[data-qid]').forEach(cb => cb.addEventListener('change', () => { syncStartBtn(); syncToggleLabel(); }));
-
-            // reward filter toggles
-            const filters = Object.fromEntries(rewardTypes.map(rt => [rt, true]));
-            $$('.reward-filter').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const rt = Number(btn.dataset.rt);
-                    filters[rt] = !filters[rt];
-                    btn.classList.toggle('off', !filters[rt]);
-                    $$(`.quest-pick[data-rt="${rt}"]`).forEach(card => {
-                        card.classList.toggle('hidden', !filters[rt]);
-                        card.querySelector('input').checked = filters[rt];
-                    });
-                    syncStartBtn();
-                    syncToggleLabel();
-                });
-            });
-
-            // select/deselect all (only affects visible quests, never hides/shows cards)
-            $('#orion-toggle-all').addEventListener('click', () => {
-                const visible = $$('.quest-pick:not(.hidden)');
-                const allChecked = visible.length > 0 && visible.every(c => c.querySelector('input').checked);
-                visible.forEach(c => { c.querySelector('input').checked = !allChecked; });
-                syncToggleLabel();
-                syncStartBtn();
-            });
-
-            // start
-            $('#orion-start-btn').addEventListener('click', () => {
-                const selected = new Set();
-                $$('input[data-qid]:checked').forEach(cb => selected.add(cb.dataset.qid));
-                const options = {
-                    autoEnroll: $('#opt-enroll').checked,
-                    autoClaim: $('#opt-claim').checked
-                };
-                body.innerHTML = '<div style="text-align:center; padding:30px; color:#949ba4; font-size:12px">Starting...</div>';
-                resolve({ selected, options });
-            });
-        });
     }
 
     async function main() {
@@ -1276,14 +1365,28 @@
             return q instanceof Map ? [...q.values()] : Object.values(q);
         };
 
-        const { selected, options } = await showQuestPicker(getQuests());
+        let quests = getQuests().filter(q =>
+            !q.userStatus?.completedAt
+            && new Date(q.config?.expiresAt).getTime() > Date.now()
+            && q.id !== CONST.ID
+            && !Tasks.skipped.has(q.id)
+        );
+
+        if (!quests.length) {
+            Logger.log('[System] All available quests are completed!', 'success');
+            return Logger.shutdown();
+        }
+
+        const pickerResult = await Logger.showQuestPicker(quests);
         if (!RUNTIME.running) return;
 
-        if (selected !== null) {
-            RUNTIME.selectedQuests = selected;
-            CONFIG.TRY_TO_CLAIM_REWARD = options.autoClaim;
-            RUNTIME.autoEnroll = options.autoEnroll;
-            Logger.log(`[System] ${selected.size} quest(s) selected. Auto-enroll: ${options.autoEnroll ? 'ON' : 'OFF'}, Auto-claim: ${options.autoClaim ? 'ON' : 'OFF'}`, 'info');
+        // Propagate UI options to global runtime state
+        RUNTIME.autoEnroll = pickerResult.autoEnroll;
+        RUNTIME.autoClaim = pickerResult.autoClaim;
+
+        if (pickerResult.selectedQuests.size === 0) {
+            Logger.log('[System] No quests selected. Shutting down.', 'info');
+            return Logger.shutdown();
         }
 
         let loopCount = 1;
@@ -1291,15 +1394,15 @@
         while (RUNTIME.running) {
             try {
                 Logger.log(`[Cycle] Starting loop #${loopCount}...`, 'info');
+                quests = getQuests();
 
-                const quests = getQuests();
-
+                // Filter out completed, expired, blacklisted, skipped, AND unselected quests
                 const active = quests.filter(q =>
-                    !q.userStatus?.completedAt
+                    pickerResult.selectedQuests.has(q.id)
+                    && !q.userStatus?.completedAt
                     && new Date(q.config?.expiresAt).getTime() > Date.now()
                     && q.id !== CONST.ID
                     && !Tasks.skipped.has(q.id)
-                    && (!RUNTIME.selectedQuests || RUNTIME.selectedQuests.has(q.id))
                 );
 
                 if (!active.length) { Logger.log('[System] All available quests are completed!', 'success'); break; }
@@ -1335,17 +1438,26 @@
                             keyName  // actual task key from config (e.g. WATCH_VIDEO_ON_MOBILE)
                         };
 
+                        // handle disabled auto-enroll (wait for user)
+                        if (!q.userStatus?.enrolledAt && !RUNTIME.autoEnroll) {
+                            Logger.updateTask(tInfo.id, {
+                                name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target,
+                                status: "PENDING", actionRequired: 'ENROLL'
+                            });
+                            return; // skip execution queue, wait for next cycle
+                        }
+
                         if (Logger.tasks.has(q.id) && Logger.tasks.get(q.id).status === "RUNNING") return;
 
-                        Logger.updateTask(tInfo.id, { name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target, status: "QUEUE" });
+                        // clear the action button if user enrolled manually
+                        Logger.updateTask(tInfo.id, {
+                            name: tInfo.name, type: tInfo.type, cur: 0, max: tInfo.target,
+                            status: "QUEUE", actionRequired: null
+                        });
 
                         const taskFunc = async () => {
-                            // JIT enrollment — only if auto-enroll is enabled
+                            // JIT enrollment (only if autoEnroll is true or user already enrolled)
                             if (!q.userStatus?.enrolledAt) {
-                                if (RUNTIME.autoEnroll === false) {
-                                    Logger.log(`[Enroll] Skipped "${tInfo.name}" (auto-enroll disabled).`, 'debug');
-                                    return;
-                                }
                                 Logger.log(`[Enroll] Accepting quest: ${tInfo.name}`, 'info');
                                 try {
                                     await Traffic.enqueue(`/quests/${q.id}/enroll`, { location: 11, is_targeted: false });
@@ -1408,7 +1520,7 @@
         console.error('[Orion Fatal]', e);
         try { Logger.log(`[System] FATAL: ${msg}`, 'err'); } catch (_) { }
         Logger.shutdown();
-        
+
         // Failsafe: release lock unconditionally so user can retry without reloading tab
         setTimeout(() => { window.orionLock = false; }, 1500);
     });
