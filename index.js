@@ -135,7 +135,9 @@
                 .ctrl-btn:hover { opacity: 1; }
                 .ctrl-stop { color: #f04747; font-weight: bold; font-size: 10px; gap: 4px; border: 1px solid #f04747; padding: 2px 6px 2px 2px; border-radius: 4px; }
                 .ctrl-stop:hover { background: rgba(240, 71, 71, 0.1); }
-                #orion-body { padding: 12px 8px 12px 12px; max-height: 450px; overflow-y: auto; flex-grow: 1; scrollbar-gutter: stable; }
+                #orion-body { padding: 12px 8px 12px 12px; max-height: 450px; overflow-y: auto; flex-grow: 1; scrollbar-gutter: stable; display: flex; flex-direction: column; }
+                #orion-body.picker-mode { overflow: hidden; }
+                #orion-picker-form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
                 #orion-ui ::-webkit-scrollbar { width: 4px; height: 4px; }
                 #orion-ui ::-webkit-scrollbar-track { background: none; }
                 #orion-ui ::-webkit-scrollbar-thumb { background: #5e5f69; border-radius: 4px; }
@@ -172,20 +174,21 @@
                 #orion-footer { padding: 8px; text-align: center; background: #191b1e; border-top: 1px solid #2b2d31; font-size: 10px; color: #72767d; }
                 .dev-btn { color: ${CONFIG.THEME}; text-decoration: none; font-weight: 700; transition: color 0.2s; }
                 .dev-btn:hover { color: #fff; }
-                .picker-section-title { font-size: 11px; font-weight: 800; color: #949ba4; margin: 12px 0 8px; letter-spacing: 0.5px; }
+                .picker-section-title { font-size: 11px; font-weight: 800; color: #949ba4; margin-bottom: 8px; letter-spacing: 0.5px; }
                 .reward-filters { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
                 .reward-filter, .type-filter { background: rgba(255,255,255,0.05); border: 2px solid; padding: 4px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; cursor: pointer; transition: 0.2s; }
                 .reward-filter:hover, .type-filter:hover { background: rgba(255,255,255,0.1); filter: brightness(1.2); }
                 .reward-filter.off, .type-filter.off { background: transparent; opacity: 0.4; border-color: #3f4147 !important; color: #80848e !important; }
-                .picker-quest-list { display: flex; flex-direction: column; gap: 8px; max-height: 180px; overflow-y: auto; padding-right: 4px; }
+                .picker-quest-list { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 80px; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; }
                 .quest-pick { display: flex; gap: 12px; padding: 10px; background: #1e1f22; border-radius: 6px; border: 1px solid #2b2d31; border-left: 4px solid #2b2d31; cursor: pointer; transition: 0.2s; align-items: center; user-select: none; }
                 .quest-pick:hover { border-color: #3f4147; }
+                .quest-pick.hidden { display: none !important; }
                 .quest-checkbox { position: relative; width: 18px; height: 18px; flex-shrink: 0; }
                 .quest-checkbox input { opacity: 0; width: 0; height: 0; position: absolute; }
                 .checkbox-box { position: absolute; top: 0; left: 0; width: 18px; height: 18px; background: #2b2d31; border-radius: 4px; transition: 0.2s; border: 1px solid #3f4147; box-sizing: border-box; }
                 .quest-checkbox input:checked ~ .checkbox-box { background: ${CONFIG.THEME}; border-color: ${CONFIG.THEME}; }
                 .quest-checkbox input:checked ~ .checkbox-box::after { content: ''; position: absolute; left: 5px; top: 2px; width: 4px; height: 8px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); }
-                .picker-options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+                .picker-options { display: flex; flex-direction: column; gap: 10px; margin-bottom: 6px; }
                 .orion-option { display: flex; justify-content: space-between; align-items: center; background: #1e1f22; padding: 10px 12px; border-radius: 6px; border: 1px solid #2b2d31; }
                 .orion-option-label { font-size: 12px; font-weight: 600; color: #dbdee1; }
                 .orion-toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0; }
@@ -195,7 +198,7 @@
                 .orion-toggle input:checked + .slider { background-color: ${CONFIG.SUCCESS}; }
                 .orion-toggle input:checked + .slider:before { transform: translateX(14px); }
                 .picker-actions { display: flex; gap: 8px; border-top: 1px solid #2b2d31; margin-top: 8px; padding-top: 12px; }
-                .quest-pick-btn { flex: 1; padding: 10px; border: none; border-radius: 4px; font-size: 12px; font-weight: 800; cursor: pointer; transition: 0.2s; color: #fff; }
+                .quest-pick-btn { flex: 1; padding: 10px; border: none; border-radius: 6px; font-size: 12px; font-weight: 800; cursor: pointer; transition: 0.2s; color: #fff; }
                 .quest-pick-btn.start { background: ${CONFIG.SUCCESS}; display: flex; align-items: center; justify-content: center; gap: 6px; }
                 .quest-pick-btn.start:hover { filter: brightness(1.15); }
                 .quest-pick-btn.deselect { background: #4e5058; }
@@ -443,6 +446,10 @@
 
                 const closePicker = (data) => {
                     if (logs) logs.style.display = 'block';
+                    if (body) {
+                        body.classList.remove('picker-mode');
+                        body.innerHTML = '';
+                    }
                     resolve(data);
                 };
 
@@ -550,13 +557,17 @@
                 const startBtn = document.getElementById('start-btn');
 
                 const getVisibleCheckboxes = () => Array.from(form.querySelectorAll('.quest-pick input[type="checkbox"]'))
-                    .filter(cb => cb.closest('.quest-pick').style.display !== 'none');
+                    .filter(cb => !cb.closest('.quest-pick').classList.contains('hidden'));
 
                 const syncUI = () => {
                     const visibleCbs = getVisibleCheckboxes();
                     const totalChecked = visibleCbs.filter(cb => cb.checked).length;
 
                     startBtn.innerHTML = `${ICONS.BOLT} START (${totalChecked})`;
+                    
+                    startBtn.disabled = totalChecked === 0;
+                    startBtn.style.opacity = totalChecked === 0 ? '0.5' : '1';
+                    startBtn.style.cursor = totalChecked === 0 ? 'not-allowed' : 'pointer';
 
                     if (visibleCbs.length === 0) {
                         selectAllBtn.disabled = true;
@@ -583,7 +594,7 @@
                         const qt = el.getAttribute('data-qt');
 
                         const isVisible = activeRewards.has(rt) && activeTypes.has(qt);
-                        el.style.display = isVisible ? '' : 'none';
+                        el.classList.toggle('hidden', !isVisible);
                     });
                     syncUI();
                 };
@@ -624,16 +635,22 @@
 
                 form.addEventListener('submit', (e) => {
                     e.preventDefault();
+                    
+                    const selected = getVisibleCheckboxes().filter(cb => cb.checked);
+                    if (selected.length === 0) return;
+
                     const data = new FormData(form);
 
                     closePicker({
-                        // only quests currently visible in the UI will be executed,
-                        // preventing accidental execution of filtered-out quests
-                        selectedQuests: new Set(getVisibleCheckboxes().filter(cb => cb.checked).map(cb => cb.value)),
+                        selectedQuests: new Set(selected.map(cb => cb.value)),
                         autoEnroll: data.has('autoEnroll'),
                         autoClaim: data.has('autoClaim')
                     });
                 });
+
+                // apply layout lock and sync initial button states
+                body.classList.add('picker-mode');
+                syncUI();
             });
         }
     };
