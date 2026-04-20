@@ -164,11 +164,11 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ## Changelog
 
 ### v4.5.3
-- Added pending state for manual quest enrollment
-- Fixed ghost tasks execution for unenrolled quests
-- "Claim Reward" button safety measures
-- Refactored UI logic to use native HTML forms
-- Added filtering by quest type
+- **Pending state** &mdash; Unenrolled quests now wait for manual acceptance in Discord instead of failing when auto-enroll is disabled.
+- **Ghost-task fix** &mdash; Unenrolled and hidden quests no longer attempt execution or time out in the background.
+- **Claim button lock** &mdash; Prevented API spam and visual state resets by locking the "Claim Reward" button during UI renders.
+- **Picker refactor** &mdash; Moved UI logic inside `Logger` and switched to native HTML forms for resilient state collection.
+- **Dynamic filters** &mdash; Added Quest Type filtering.
 
 ### v4.5.2
 - **Fix NodeList error** &mdash; `$$` now returns a real Array so `.every()` works on visible quest cards. Resolves `TypeError: visible.every is not a function` when clicking (De)select All
