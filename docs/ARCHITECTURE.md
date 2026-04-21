@@ -28,9 +28,9 @@ The file is organized top-to-bottom as a layered IIFE. Each "module" is just a `
 
 | Module          | Responsibility                                                                 |
 | --------------- | ------------------------------------------------------------------------------ |
-| `CONFIG`        | User-tunable constants (colors, log limit, reward-claim default)               |
+| `CONFIG`        | User-tunable constants (colors, log limit, UI visibility toggles)              |
 | `SYS`           | Frozen internal limits (max task time, retries, failure threshold)             |
-| `RUNTIME`       | Mutable runtime state (running flag, cleanup set, user selections)             |
+| `RUNTIME`       | Mutable runtime state (running flag, cleanups, user selections, auto-enroll/claim preferences)|
 | `ICONS`         | Inline SVG sprites used by the dashboard                                       |
 | `CONST`         | Frozen event names and blacklisted quest IDs                                   |
 | `Storage`       | Thin wrapper around `localStorage` (namespaced under `orion_*`)                |
@@ -38,7 +38,7 @@ The file is organized top-to-bottom as a layered IIFE. Each "module" is just a `
 | `Traffic`       | Request queue with exponential backoff, rate-limit awareness, retry ceiling    |
 | `Mods`          | Reference to the Discord webpack stores discovered at boot                     |
 | `Patcher`       | Injects fake running-game records into `RunningGameStore`                      |
-| `Logger`        | Dashboard UI renderer + log ring-buffer                                        |
+| `Logger`        | Quest picker UI, dashboard renderer, and log ring-buffer                       |
 | `Tasks`         | Per-task-type handlers (GAME / STREAM / VIDEO / ACTIVITY / ACHIEVEMENT)        |
 | `main()`        | Entry point — discovers stores, renders dashboard, runs task pipeline          |
 
@@ -60,10 +60,10 @@ paste into console
 └──────────┬───────────┘
            │
            ▼
-┌──────────────────────┐
-│ showQuestPicker()    │  visual UI — checkboxes + filters
-│ user clicks START    │
-└──────────┬───────────┘
+┌──────────────────────────┐
+│ Logger.showQuestPicker() │  visual UI — checkboxes + filters
+│ user clicks START        │
+└──────────┬───────────────┘
            │
            ▼
 ┌──────────────────────┐
