@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.5.4 (Enterprise)",
+        VERSION: "v4.5.5 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1236,13 +1236,17 @@
                 throw new Error("Webpack chunk not found - is this running inside Discord?");
             }
 
-            // capture __webpack_require__ via the chunk callback. capturing this way is
-            // resilient across Discord builds — push() return shape varies (some builds
-            // return the require fn, others return undefined), but the callback fires
-            // unconditionally with the require function as argument.
-            let req;
-            webpackChunkdiscord_app.push([[Symbol()], {}, r => { req = r; }]);
+            // capture __webpack_require__ via two independent paths and pick whichever
+            // is valid. behavior across Discord builds differs:
+            //   - Canary / older Stable: push() returns the require itself; the callback
+            //     may or may not be invoked.
+            //   - Newer Stable (536904+): push() returns undefined, but the callback fires
+            //     with a (stripped) require argument.
+            // grabbing both keeps the script working on every build that has any path.
+            let cbReq;
+            const pushReq = webpackChunkdiscord_app.push([[Symbol()], {}, r => { cbReq = r; }]);
             webpackChunkdiscord_app.pop();
+            const req = (cbReq && cbReq.c) ? cbReq : (pushReq && pushReq.c ? pushReq : null);
             if (!req?.c) throw new Error("Module registry not available - Discord build incompatible (see issue #20)");
             const modules = Object.values(req.c);
 
