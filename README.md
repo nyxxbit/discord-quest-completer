@@ -152,7 +152,7 @@ index.js
 ├─ Traffic                     FIFO request queue with exponential backoff
 ├─ Patcher                     RunStore / StreamStore monkey-patching
 ├─ Tasks                       VIDEO, GAME, STREAM, ACTIVITY, ACHIEVEMENT handlers
-├─ loadModules()               resilient webpack extraction via constructor.displayName
+├─ loadModules()               dual-path extraction (Vencord API + native fallback)
 └─ main()                      discover → JIT enroll → execute → claim → loop
 ```
 
