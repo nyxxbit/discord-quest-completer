@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.5.3
+**Auto-complete every Discord Quest in seconds** &mdash; v4.5.4
 
-[![Version](https://img.shields.io/badge/v4.5.3-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.5.4-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -19,9 +19,9 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ---
 
 > [!WARNING]
-> **Discord Stable is currently broken** (late April 2026). A new Stable build changed the webpack runtime, breaking `loadModules()` with `Cannot read properties of undefined (reading 'c')`.
+> **Discord Stable build 536904+ is partially incompatible** (late April 2026). A new Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache through any post-boot path. v4.5.4 fixes the original `Cannot read properties of undefined (reading 'c')` error but cannot reach the live store cache &mdash; a full fix requires boot-time injection (see [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20)).
 >
-> **Workaround:** use [Discord Canary](https://canary.discord.com/download) until a fix ships. Tracked in [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20) &mdash; community PRs welcome.
+> **Workaround:** use [Discord Canary](https://canary.discord.com/download) for now. Community PRs to land boot-time injection are welcome.
 
 ---
 
@@ -169,6 +169,12 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.5.4
+- **Resilient `loadModules`** &mdash; `__webpack_require__` is now captured via the chunk callback closure instead of relying on `push()`'s return value. Some Discord builds return `undefined` from `push`; the callback always fires with the require argument
+- **CSS `:disabled` styling** &mdash; Claim button disabled/failed states are driven by `:disabled` and a `.failed` modifier class. No more inline-style assignments scattered across handler code
+- **Filter handler dedup** &mdash; The reward-filter and type-filter click handlers were near-identical; now collapsed into a single `FILTER_KINDS` table-driven path
+- **Icon resolution simplification** &mdash; 7-arm if/else chain in `Logger.render` replaced with a single ternary expression
 
 ### v4.5.3
 - **Pending state** &mdash; Unenrolled quests now wait for manual acceptance in Discord instead of failing when auto-enroll is disabled.

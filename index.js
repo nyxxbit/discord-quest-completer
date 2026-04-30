@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.5.3 (Enterprise)",
+        VERSION: "v4.5.4 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -164,8 +164,10 @@
                 .claim-btn, .goto-btn { padding: 4px 10px; border: none; border-radius: 4px; color: #fff; font-size: 10px; font-weight: 700; cursor: pointer; margin-top: 6px; transition: filter 0.2s ease; text-transform: uppercase; letter-spacing: 0.5px; }
                 .claim-btn { background: ${CONFIG.SUCCESS}; }
                 .goto-btn { background: ${CONFIG.THEME}; }
-                .claim-btn:hover, .goto-btn:hover { filter: brightness(1.15); }
-                .claim-btn:active, .goto-btn:active { filter: brightness(0.8); }
+                .claim-btn:hover:not(:disabled), .goto-btn:hover:not(:disabled) { filter: brightness(1.15); }
+                .claim-btn:active:not(:disabled), .goto-btn:active:not(:disabled) { filter: brightness(0.8); }
+                .claim-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+                .claim-btn.failed { background: #4f545c; opacity: 0.8; }
                 #orion-logs { padding: 10px 12px; background: #0e0f10; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; color: #949ba4; height: 140px; overflow-y: auto; border-top: 1px solid #2b2d31; scroll-behavior: smooth; }
                 .log-item { margin-bottom: 4px; display: flex; gap: 8px; line-height: 1.4; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 2px; }
                 .log-item:last-of-type { border: none; }
@@ -399,14 +401,16 @@
             // Rebuild HTML in a single pass to prevent DOM flickering
             body.innerHTML = sorted.map(([id, t]) => {
                 const pct = t.pending || t.failed ? 0 : Math.min(100, (t.cur / t.max) * 100).toFixed(1);
-                let icon = ICONS.BOLT;
-                if (t.done) icon = ICONS.CHECK;
-                else if (t.failed) icon = ICONS.STOP;
-                else if (t.pending) icon = ICONS.CLOCK;
-                else if (t.type === 'VIDEO') icon = ICONS.VIDEO;
-                else if (t.type === 'ACHIEVEMENT') icon = ICONS.ACTIVITY;
-                else if (t.type?.includes('GAME')) icon = ICONS.GAME;
-                else if (t.type?.includes('STREAM')) icon = ICONS.STREAM;
+                // state-based icons (done/failed/pending) win over type-based icons.
+                const icon =
+                    t.done ? ICONS.CHECK :
+                    t.failed ? ICONS.STOP :
+                    t.pending ? ICONS.CLOCK :
+                    t.type === 'VIDEO' ? ICONS.VIDEO :
+                    t.type === 'ACHIEVEMENT' ? ICONS.ACTIVITY :
+                    t.type?.includes('GAME') ? ICONS.GAME :
+                    t.type?.includes('STREAM') ? ICONS.STREAM :
+                    ICONS.BOLT;
 
                 let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'DONE' : t.status;
                 let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
@@ -415,13 +419,9 @@
                 let actionBtn = '';
 
                 if (t.claimable) {
-                    if (t.claimState === 'WAITING') {
-                        actionBtn = `<button class="claim-btn" disabled style="opacity: 0.5; cursor: not-allowed;">WAITING...</button>`;
-                    } else if (t.claimState === 'FAILED') {
-                        actionBtn = `<button class="claim-btn" disabled style="background: #4f545c; opacity: 0.8; cursor: not-allowed;">ACTION REQUIRED</button>`;
-                    } else {
-                        actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
-                    }
+                    if (t.claimState === 'WAITING') actionBtn = `<button class="claim-btn" disabled>WAITING...</button>`;
+                    else if (t.claimState === 'FAILED') actionBtn = `<button class="claim-btn failed" disabled>ACTION REQUIRED</button>`;
+                    else actionBtn = `<button class="claim-btn" data-id="${id}">CLAIM REWARD</button>`;
                 } else if (t.actionRequired === 'ENROLL') {
                     statusText = 'ACTION REQUIRED';
                     progressLabel = 'Accept quest in Discord';
@@ -599,27 +599,23 @@
                     syncUI();
                 };
 
+                // map filter buttons to their state set + data attribute. lets the click
+                // handler treat reward-filter and type-filter uniformly.
+                const FILTER_KINDS = [
+                    { cls: 'reward-filter', attr: 'data-rt', set: activeRewards },
+                    { cls: 'type-filter', attr: 'data-qt', set: activeTypes }
+                ];
+
                 form.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('reward-filter')) {
+                    const kind = FILTER_KINDS.find(k => e.target.classList.contains(k.cls));
+                    if (kind) {
                         e.preventDefault();
-                        const rt = e.target.getAttribute('data-rt');
+                        const value = e.target.getAttribute(kind.attr);
                         e.target.classList.toggle('off');
-
-                        if (e.target.classList.contains('off')) activeRewards.delete(rt);
-                        else activeRewards.add(rt);
-
+                        if (e.target.classList.contains('off')) kind.set.delete(value);
+                        else kind.set.add(value);
                         applyFilters();
-                    }
-
-                    if (e.target.classList.contains('type-filter')) {
-                        e.preventDefault();
-                        const qt = e.target.getAttribute('data-qt');
-                        e.target.classList.toggle('off');
-
-                        if (e.target.classList.contains('off')) activeTypes.delete(qt);
-                        else activeTypes.add(qt);
-
-                        applyFilters();
+                        return;
                     }
 
                     if (e.target.id === 'select-all-btn') {
@@ -1240,7 +1236,14 @@
                 throw new Error("Webpack chunk not found - is this running inside Discord?");
             }
 
-            const req = webpackChunkdiscord_app.push([[Symbol()], {}, r => r]); webpackChunkdiscord_app.pop();
+            // capture __webpack_require__ via the chunk callback. capturing this way is
+            // resilient across Discord builds — push() return shape varies (some builds
+            // return the require fn, others return undefined), but the callback fires
+            // unconditionally with the require function as argument.
+            let req;
+            webpackChunkdiscord_app.push([[Symbol()], {}, r => { req = r; }]);
+            webpackChunkdiscord_app.pop();
+            if (!req?.c) throw new Error("Module registry not available - Discord build incompatible (see issue #20)");
             const modules = Object.values(req.c);
 
             // real Flux stores have constructor.displayName set to their class name
