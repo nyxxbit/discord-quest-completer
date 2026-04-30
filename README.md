@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.5.6
+**Auto-complete every Discord Quest in seconds** &mdash; v4.6
 
-[![Version](https://img.shields.io/badge/v4.5.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -19,9 +19,11 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ---
 
 > [!WARNING]
-> **Discord Stable build 536904+ is partially incompatible** (late April 2026). A new Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache through any post-boot path. v4.5.6 fixes the original `Cannot read properties of undefined (reading 'c')` error but cannot reach the live store cache &mdash; a full fix requires boot-time injection (see [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20)).
+> **Vanilla Discord Stable is partially incompatible.** A recent Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache post-boot.
 >
-> **Workaround:** use [Discord Canary](https://canary.discord.com/download) for now. Community PRs to land boot-time injection are welcome.
+> **Workarounds (v4.6+):**
+> 1. **Use [Vencord](https://vencord.dev/)** &mdash; Orion auto-detects Vencord and uses its boot-time injected Webpack API to fully restore functionality on Stable.
+> 2. Or use **[Discord Canary](https://canary.discord.com/download)** (without mods), where the native extraction still works.
 
 ---
 
@@ -170,11 +172,13 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 
 ## Changelog
 
-### v4.5.6
-- **Sound on completion** &mdash; New picker toggle "Sound on quest completion" plays a soft tone after each quest finishes and a short arpeggio when the whole queue is done. Useful when running with auto-claim off so you can come back to claim before the captcha times out. Resolves [#24](https://github.com/nyxxbit/discord-quest-completer/issues/24)
+### v4.6
+- **Vencord integration** &mdash; `loadModules` now uses `window.Vencord.Webpack` directly when Vencord is installed. Restores full functionality on modern Discord Stable, where the native chunk push hook can no longer reach the live module cache. Resolves [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20)
+- **Sentry-proof native extraction** &mdash; The push callback fires once per registered runtime; Discord ships Sentry's stripped runtime alongside the real one. The capture now picks the require with the largest `.c`, ignoring Sentry's tiny instance. Resolves [#23](https://github.com/nyxxbit/discord-quest-completer/issues/23) and [#26](https://github.com/nyxxbit/discord-quest-completer/issues/26)
+- **Sound on completion** &mdash; New picker toggle plays a soft tone after each quest finishes and a 3-note arpeggio when the whole queue is done. Useful with auto-claim off so you can come back before the captcha times out. Resolves [#24](https://github.com/nyxxbit/discord-quest-completer/issues/24)
 
 ### v4.5.5
-- **Hotfix Canary regression from v4.5.4** &mdash; `loadModules` now captures `__webpack_require__` via BOTH the chunk callback closure AND the `push()` return value, picking whichever exposes `.c`. v4.5.4 broke Discord Canary by relying solely on the callback path; on Canary `push()` returns the require directly without invoking the callback. Resolves [#23](https://github.com/nyxxbit/discord-quest-completer/issues/23)
+- **Hotfix Canary regression from v4.5.4** &mdash; first attempt at the dual-capture path. Superseded by v4.6's Sentry-proof solution.
 
 ### v4.5.4 (broken on Canary &mdash; use v4.5.5+)
 - **Resilient `loadModules`** &mdash; `__webpack_require__` is now captured via the chunk callback closure instead of relying on `push()`'s return value. Some Discord builds return `undefined` from `push`; the callback always fires with the require argument
