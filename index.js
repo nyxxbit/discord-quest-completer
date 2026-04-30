@@ -1232,18 +1232,65 @@
 
     function loadModules() {
         try {
+            // === VENCORD USAGE ===
+            if (typeof window.Vencord !== 'undefined' && window.Vencord.Webpack) {
+                Logger.log('[System] Vencord detected. Using Vencord Webpack API...', 'info');
+                const W = window.Vencord.Webpack;
+
+                let routerModule;
+                try {
+                    const m = W.findByCode('transitionTo -');
+                    if (m) {
+                        for (const prop of [m, m.default, ...Object.values(m)]) {
+                            if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
+                                routerModule = { transitionTo: prop };
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) { }
+
+                Mods = {
+                    QuestStore: W.findStore('QuestStore') || W.findStore('QuestsStore'),
+                    RunStore: W.findStore('RunningGameStore'),
+                    StreamStore: W.findStore('ApplicationStreamingStore'),
+                    ChanStore: W.findStore('ChannelStore'),
+                    GuildChanStore: W.findStore('GuildChannelStore'),
+                    Dispatcher: W.Common?.FluxDispatcher || W.findByProps('dispatch', 'subscribe', 'flushWaitQueue'),
+                    API: W.Common?.RestAPI || W.findByProps('get', 'post', 'del'),
+                    Router: routerModule
+                };
+
+                const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
+                const missing = required.filter(k => !Mods[k]);
+                
+                if (missing.length === 0) {
+                    const optional =['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
+                    optional.forEach(k => { if (!Mods[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
+                    
+                    Patcher.init(Mods.RunStore);
+                    return true;
+                }
+                Logger.log(`[System] Vencord extraction missed: ${missing.join(', ')}. Falling back to native...`, 'warn');
+            }
+
+            // === NATIVE FALLBACK (Canary / PTB without mods) ===
             if (typeof webpackChunkdiscord_app === 'undefined') {
                 throw new Error("Webpack chunk not found - is this running inside Discord?");
             }
 
-            // capture __webpack_require__ via the chunk callback. capturing this way is
-            // resilient across Discord builds — push() return shape varies (some builds
-            // return the require fn, others return undefined), but the callback fires
-            // unconditionally with the require function as argument.
             let req;
-            webpackChunkdiscord_app.push([[Symbol()], {}, r => { req = r; }]);
+
+            webpackChunkdiscord_app.push([[Symbol()], {}, (r) => {
+                // ignore Sentry cache by choosing a bigger chunk
+                const currentCacheSize = Object.keys(req?.c || {}).length;
+                const newCacheSize = Object.keys(r?.c || {}).length;
+                if (newCacheSize > currentCacheSize) req = r;
+            }]);
             webpackChunkdiscord_app.pop();
+            
             if (!req?.c) throw new Error("Module registry not available - Discord build incompatible (see issue #20)");
+
             const modules = Object.values(req.c);
 
             // real Flux stores have constructor.displayName set to their class name
@@ -1314,7 +1361,7 @@
                         const exp = m?.exports;
                         if (!exp) continue;
 
-                        for (const prop of Object.values(exp)) {
+                        for (const prop of [exp, exp.default, ...Object.values(exp)]) {
                             if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
                                 return { transitionTo: prop };
                             }
@@ -1324,25 +1371,23 @@
                 return undefined;
             }
 
-            const found = {
-                QuestStore:     findStore('QuestStore'),
-                RunStore:       findStore('RunningGameStore'),
-                StreamStore:    findStore('ApplicationStreamingStore'),
-                ChanStore:      findStore('ChannelStore'),
+            Mods = {
+                QuestStore: findStore('QuestStore'),
+                RunStore: findStore('RunningGameStore'),
+                StreamStore: findStore('ApplicationStreamingStore'),
+                ChanStore: findStore('ChannelStore'),
                 GuildChanStore: findStore('GuildChannelStore'),
-                Dispatcher:     findDispatcher(),
-                API:            findAPI(),
-                Router:         findRouter()
+                Dispatcher: findDispatcher(),
+                API: findAPI(),
+                Router: findRouter()
             };
 
             const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
-            const missing = required.filter(k => !found[k]);
+            const missing = required.filter(k => !Mods[k]);
             if (missing.length > 0) throw new Error(`Core modules not found: ${missing.join(', ')}`);
 
             const optional = ['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
-            optional.forEach(k => { if (!found[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
-
-            Mods = found;
+            optional.forEach(k => { if (!Mods[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
             Patcher.init(Mods.RunStore);
             return true;
         } catch (e) {
