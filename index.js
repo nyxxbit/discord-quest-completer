@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.5.5 (Enterprise)",
+        VERSION: "v4.5.6 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -27,7 +27,44 @@
         running: true,
         cleanups: new Set(),            // tracks active event listeners for safe shutdown
         autoEnroll: true,               // whether to auto-enroll in quests before execution
-        autoClaim: false                // whether to try auto-claiming quest rewards
+        autoClaim: false,               // whether to try auto-claiming quest rewards
+        playSound: false                // whether to play an audio cue on quest completion
+    };
+
+    /* ── audio cue ─────────────────────────────────────────────────
+       Tiny Web Audio synth. Avoids shipping any binary asset.
+       'tick' fires after a single quest completes; 'done' fires when
+       the whole queue is finished. Soft-fails on environments without
+       AudioContext (e.g. fingerprinting blockers).
+    ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── */
+    const Sound = {
+        play(type) {
+            if (!RUNTIME.playSound) return;
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                const o = ctx.createOscillator();
+                const g = ctx.createGain();
+                o.connect(g); g.connect(ctx.destination);
+                o.type = 'sine';
+                const t0 = ctx.currentTime;
+                if (type === 'done') {
+                    // C5 E5 G5 arpeggio
+                    o.frequency.setValueAtTime(523.25, t0);
+                    o.frequency.setValueAtTime(659.25, t0 + 0.12);
+                    o.frequency.setValueAtTime(783.99, t0 + 0.24);
+                    g.gain.setValueAtTime(0.18, t0);
+                    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
+                    o.start(t0); o.stop(t0 + 0.6);
+                } else {
+                    o.frequency.value = 880; // A5
+                    g.gain.setValueAtTime(0.12, t0);
+                    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
+                    o.start(t0); o.stop(t0 + 0.2);
+                }
+            } catch (_) { /* audio unavailable, ignore */ }
+        }
     };
 
     const ICONS = Object.freeze({
@@ -544,6 +581,7 @@
                         <div class="picker-options">
                             ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
                             ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
+                            ${buildToggle('playSound', 'Sound on quest completion', RUNTIME.playSound)}
                         </div>
                         
                         <div class="picker-actions">
@@ -640,7 +678,8 @@
                     closePicker({
                         selectedQuests: new Set(selected.map(cb => cb.value)),
                         autoEnroll: data.has('autoEnroll'),
-                        autoClaim: data.has('autoClaim')
+                        autoClaim: data.has('autoClaim'),
+                        playSound: data.has('playSound')
                     });
                 });
 
@@ -1187,6 +1226,7 @@
         async finish(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
             Logger.log(`[Task] Completed "${t.name}"!`, 'success');
+            Sound.play('tick');
 
             try {
                 if (typeof Notification !== 'undefined' && Notification.permission === "granted") {
@@ -1407,6 +1447,7 @@
         // Propagate UI options to global runtime state
         RUNTIME.autoEnroll = pickerResult.autoEnroll;
         RUNTIME.autoClaim = pickerResult.autoClaim;
+        RUNTIME.playSound = pickerResult.playSound;
 
         if (pickerResult.selectedQuests.size === 0) {
             Logger.log('[System] No quests selected. Shutting down.', 'info');
@@ -1429,7 +1470,7 @@
                     && !Tasks.skipped.has(q.id)
                 );
 
-                if (!active.length) { Logger.log('[System] All available quests are completed!', 'success'); break; }
+                if (!active.length) { Logger.log('[System] All available quests are completed!', 'success'); Sound.play('done'); break; }
 
                 const queues = { video: [], game: [] };
 
