@@ -40,6 +40,7 @@ The file is organized top-to-bottom as a layered IIFE. Each "module" is just a `
 | `Patcher`       | Injects fake running-game records into `RunningGameStore`                      |
 | `Logger`        | Quest picker UI, dashboard renderer, and log ring-buffer                       |
 | `Tasks`         | Per-task-type handlers (GAME / STREAM / VIDEO / ACTIVITY / ACHIEVEMENT)        |
+| `loadModules()` | Dual-path module extraction (Vencord API + native fallback)                    |
 | `main()`        | Entry point — discovers stores, renders dashboard, runs task pipeline          |
 
 ## Runtime sequence
@@ -80,11 +81,10 @@ paste into console
 
 Discord ships its stores inside minified webpack bundles whose exported paths (`e.Z`, `e.A`, `e.Ay`, `e.ZP`, …) change with every build. Relying on hardcoded paths breaks within days.
 
-Since v4.1, `loadModules()` takes a different approach:
+Since v4.6, `loadModules()` employs a dual-path extraction strategy:
 
-1. Push a fake webpack chunk to obtain the module registry (`webpackChunkdiscord_app`).
-2. Walk every module's exports.
-3. Match stores by `constructor.displayName` (e.g. `"QuestStore"`, `"RunningGameStore"`, `"StreamStore"`), not by minified key.
+1. **Vencord integration**: If `window.Vencord.Webpack` is present, it directly requests stores and props via Vencord's boot-time injected API. This completely bypasses recent Discord Stable runtime limitations.
+2. **Native Fallback**: For vanilla Canary/PTB clients, it pushes a fake webpack chunk to `webpackChunkdiscord_app` to capture the module registry. It guards against Sentry's secondary runtime by picking the `__webpack_require__` instance with the largest cache, walks every module's exports, and matches stores by `constructor.displayName` (e.g. `"QuestStore"`, `"RunningGameStore"`), not by minified key.
 
 `displayName` is a developer-ergonomic string that Discord generally keeps stable across builds, which gives us a cheap, robust hook point.
 
@@ -136,7 +136,9 @@ Current notable choices (all already in code, not proposals):
 
 ## Compatibility
 
-- **Discord Desktop only** (Stable, PTB, Canary). The script needs `window.webpackChunkdiscord_app`, which is only present in the Electron client.
+- **Discord Desktop only** (Stable, PTB, Canary). The script needs either `window.webpackChunkdiscord_app` or `window.Vencord`, which are only present in the Electron client.
+- **Vanilla Stable Notice**: Vanilla Discord Stable no longer exposes the live webpack cache post-boot. Users on the Stable branch must have **Vencord** installed for the script to work via the DevTools console.
+- **Canary / PTB**: Native extraction still works without mods.
 - **Browsers** (Chrome, Kiwi, etc.) do not expose webpack chunks the same way → script exits with "Core modules not found".
 - **Mobile clients** are out of scope and will remain so.
 

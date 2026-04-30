@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.5.4
+**Auto-complete every Discord Quest in seconds** &mdash; v4.6
 
-[![Version](https://img.shields.io/badge/v4.5.4-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -19,9 +19,11 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ---
 
 > [!WARNING]
-> **Discord Stable build 536904+ is partially incompatible** (late April 2026). A new Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache through any post-boot path. v4.5.4 fixes the original `Cannot read properties of undefined (reading 'c')` error but cannot reach the live store cache &mdash; a full fix requires boot-time injection (see [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20)).
+> **Vanilla Discord Stable is partially incompatible**. A recent Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache post-boot.
 >
-> **Workaround:** use [Discord Canary](https://canary.discord.com/download) for now. Community PRs to land boot-time injection are welcome.
+> **Workarounds:**
+> 1. **Use [Vencord](https://vencord.dev/)**: Orion v4.6+ automatically detects Vencord and uses its boot-time injected Webpack API to restore 100% functionality on Discord Stable.
+> 2. Or use **[Discord Canary](https://canary.discord.com/download)** (without mods), where the native extraction still works.
 
 ---
 
@@ -150,7 +152,7 @@ index.js
 ├─ Traffic                     FIFO request queue with exponential backoff
 ├─ Patcher                     RunStore / StreamStore monkey-patching
 ├─ Tasks                       VIDEO, GAME, STREAM, ACTIVITY, ACHIEVEMENT handlers
-├─ loadModules()               resilient webpack extraction via constructor.displayName
+├─ loadModules()               dual-path extraction (Vencord API + native fallback)
 └─ main()                      discover → JIT enroll → execute → claim → loop
 ```
 
@@ -169,6 +171,10 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.6
+- **Vencord integration** &mdash; Added direct integration with `window.Vencord.Webpack`. Restores full script functionality on modern Discord Stable builds for users running Vencord, bypassing the broken native chunk push hook.
+- **Sentry-proof native extraction** &mdash; Fixed `Core modules not found` error on Canary/PTB by guarding the module capture callback against Sentry's secondary, stripped-down webpack runtime.
 
 ### v4.5.4
 - **Resilient `loadModules`** &mdash; `__webpack_require__` is now captured via the chunk callback closure instead of relying on `push()`'s return value. Some Discord builds return `undefined` from `push`; the callback always fires with the require argument
