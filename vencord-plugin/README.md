@@ -2,17 +2,17 @@
 
 A [Vencord](https://vencord.dev) userplugin port of [Orion](../README.md), the auto-quest-completer for Discord.
 
-> **Userplugin only.** This will not be accepted upstream into Vencord — Vencord does not accept plugins that automate Discord features. You install it manually as a third-party userplugin.
+> **Userplugin only.** Will not be accepted upstream into Vencord — Vencord does not accept plugins that automate Discord features. Install manually as a third-party userplugin.
 
-> **Desktop client only.** Same hard limit as the userscript version — Discord's internal Flux stores only exist in the desktop client (Stable, PTB, Canary). Vencord on web/mobile won't work for this plugin.
+> **Desktop client only.** Same hard limit as the userscript — Discord's internal Flux stores only exist in the desktop client (Stable, PTB, Canary). Vencord on web/mobile won't work for this plugin.
 
 ---
 
 ## Status
 
-**Phase 1 — Scaffold.** The plugin loads, registers settings in Vencord's UI, resolves Discord's internal Flux stores via `findStore`, and logs incomplete quests on `start()`. **Quest execution is not yet ported.**
+**Functional.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
 
-For actual quest completion right now, use the [userscript version](../README.md). This Vencord port is being built incrementally — see the roadmap below.
+The remaining gap from the userscript is the floating dashboard panel — progress is currently surfaced via Discord's native console + `/orion status` rather than a custom DOM overlay. That fits the Vencord usage model better, but if you want the panel back, see the open enhancement tracker.
 
 ---
 
@@ -24,8 +24,7 @@ You need a working Vencord development setup. Follow [Vencord's installing guide
 # From inside your local Vencord clone
 cd src/userplugins
 
-# Clone the OrionQuest repo to a temporary folder, move only the
-# plugin subdirectory into place, then clean up
+# Pull just this plugin's directory
 git clone --depth 1 https://github.com/nyxxbit/discord-quest-completer.git _orion-temp
 mv _orion-temp/vencord-plugin orionQuests
 rm -rf _orion-temp
@@ -41,57 +40,85 @@ Restart Discord. Open **Vencord settings → Plugins**, search for `OrionQuests`
 
 ### Verifying the install
 
-Open Discord's DevTools (`Ctrl+Shift+I`) → Console tab. After enabling the plugin you should see something like:
+After enabling, type `/orion status` in any channel. Expected response:
 
 ```
-[Vencord] [OrionQuests] Starting OrionQuests (Phase 1 scaffold)
-[Vencord] [OrionQuests] Discord stores loaded: { QuestStore: true, RunStore: true, ... }
-[Vencord] [OrionQuests] Found 3 incomplete quests
-[Vencord] [OrionQuests]   • Watch Steam Game Festival — task types: WATCH_VIDEO
-[Vencord] [OrionQuests]   • Play Helldivers 2 — task types: PLAY_ON_DESKTOP
-[Vencord] [OrionQuests]   • ...
-[Vencord] [OrionQuests] Phase 1 scaffold complete. Quest execution is not yet implemented...
+Orion
+Idle. Use /orion start to begin.
 ```
 
-If you see `QuestStore not found via findStore`, Discord likely renamed the store internally — open an issue with the Discord build version and I'll adjust the lookup.
+Then `/orion start` to kick off the cycle. The console (`Ctrl+Shift+I`) shows progress logs.
+
+If you see `QuestStore not found`, Discord likely renamed the store internally — open an issue with the Discord build version and I'll adjust the lookup.
+
+---
+
+## Slash command
+
+`/orion <action>` — one of:
+
+| Action | Effect |
+| --- | --- |
+| `start` | Start the engine. Loads stores, runs the quest cycle. |
+| `stop` | Stop the engine. Restores patched stores, clears running tasks. |
+| `status` | Show what's running and progress per task. |
+
+The reply is bot-only (no one else in the channel sees it).
 
 ---
 
 ## Settings
 
-Exposed in Vencord's plugin settings UI. Mirrors the `CONFIG` object in the userscript version.
+Exposed in Vencord's plugin settings UI. Persisted via Vencord's `DataStore`.
 
 | Setting | Default | Equivalent in `../index.js` |
-|---|---|---|
-| Try to claim reward | `false` | `CONFIG.TRY_TO_CLAIM_REWARD` |
+| --- | --- | --- |
+| Auto Start | `false` | (none — userscript starts on paste) |
+| Try to claim reward | `false` | `RUNTIME.autoClaim` (picker toggle) |
 | Hide activity | `false` | `CONFIG.HIDE_ACTIVITY` |
-| Game concurrency | `1` | `CONFIG.GAME_CONCURRENCY` |
-| Video concurrency | `2` | `CONFIG.VIDEO_CONCURRENCY` |
+| Game concurrency | `1` | inferred from `runConcurrent(queues.game, 1)` |
+| Video concurrency | `2` | inferred from `runConcurrent(queues.video, 2)` |
 | Verbose logging | `false` | (debug logs) |
 
 ---
 
-## Roadmap
+## Architecture
 
-- [x] **Phase 1** — Plugin scaffold, settings UI, store discovery, quest listing
-- [ ] **Phase 2** — Quest enrollment + skip-list + traffic queue with backoff
-- [ ] **Phase 3** — `VIDEO` task handler (port from `Tasks.VIDEO` in `../index.js`)
-- [ ] **Phase 4** — `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT` handlers
-- [ ] **Phase 5** — React dashboard (replaces the DOM-injected panel from the userscript)
-- [ ] **Phase 6** — Auto-claim with captcha fallback
-- [ ] **Phase 7** — Native commands (`/orion start`, `/orion stop`, `/orion status`)
+```
+vencord-plugin/
+├── index.tsx     # plugin entry, /orion slash command, lifecycle
+├── settings.ts   # Vencord settings schema
+├── orion.ts      # store loading, main cycle loop, dashboard registry
+├── traffic.ts    # FIFO request queue with exponential backoff
+├── tasks.ts      # per-type handlers (VIDEO / GAME / STREAM / ACTIVITY / ACHIEVEMENT)
+├── patcher.ts    # RunningGameStore monkey-patch + RPC dispatch
+├── types.ts      # shared TypeScript interfaces
+└── util.ts       # sleep / rnd / sanitize helpers
+```
+
+Each module is the TypeScript equivalent of the same-named section in `../index.js`. Discord-specific webpack discovery is replaced by Vencord's `findStore` / `findByProps` + `Common.FluxDispatcher` / `Common.RestAPI`.
 
 ---
 
 ## Why a separate plugin instead of just running the userscript inside Vencord?
 
-You *can* paste the userscript into Discord's DevTools console even if you're running Vencord. It still works. The plugin port exists because:
+You *can* paste the userscript into Discord's DevTools console even if you're running Vencord. It still works (and v4.6 of the userscript even auto-detects Vencord). The plugin port exists because:
 
-1. **Lifecycle integration** — Vencord starts/stops the plugin automatically with Discord, no manual paste each time
-2. **Settings UI** — Vencord generates a native settings panel from `definePluginSettings`, no editing source before running
-3. **Persistent across reloads** — settings live in Vencord's `DataStore`, not `localStorage`
-4. **Cleaner module discovery** — uses Vencord's `findStore` instead of the manual `webpackChunkdiscord_app` walk
-5. **Smaller maintenance surface** — when Discord updates and breaks store discovery, Vencord's helpers usually adapt before the userscript does
+1. **Lifecycle integration** — Vencord starts/stops the plugin automatically with Discord, no manual paste each time.
+2. **Settings UI** — Vencord generates a native settings panel from `definePluginSettings`, no editing source before running.
+3. **Persistent across reloads** — settings live in Vencord's `DataStore`, not `localStorage`.
+4. **Cleaner module discovery** — `findStore` is more resilient across Discord builds than the userscript's manual `webpackChunkdiscord_app` walk.
+5. **Slash commands** — `/orion start|stop|status` from any channel, no need to open DevTools.
+
+---
+
+## Known limitations
+
+Same as the userscript:
+
+- **ACHIEVEMENT_IN_ACTIVITY** quests are server-validated. Heartbeat spoofing is attempted; on rejection, falls back to passive monitoring (you have to actually play the activity).
+- **Browsers / mobile** never supported.
+- **PLAY_ON_DESKTOP** progress is real wall-clock elapsed time on Discord's server. Cannot be accelerated.
 
 ---
 

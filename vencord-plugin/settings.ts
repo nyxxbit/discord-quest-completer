@@ -4,19 +4,24 @@
  * SPDX-License-Identifier: MIT
  *
  * Plugin settings — exposed in Vencord's plugin settings UI.
- * These map 1:1 to the CONFIG object in the userscript version
- * (../index.js), but are persisted via Vencord's DataStore instead
- * of being hardcoded.
+ * Persisted via Vencord's DataStore.
  */
 
 import { definePluginSettings } from "@api/Settings";
 import { OptionType } from "@utils/types";
 
 export const settings = definePluginSettings({
+    autoStart: {
+        type: OptionType.BOOLEAN,
+        description:
+            "Start the engine automatically when the plugin loads. Otherwise use the /orion start slash command.",
+        default: false,
+    },
+
     tryToClaimReward: {
         type: OptionType.BOOLEAN,
         description:
-            "Try to auto-claim rewards immediately on completion. May trigger a captcha — disable if you'd rather click CLAIM in the dashboard manually.",
+            "Try to auto-claim rewards immediately on completion. May trigger a captcha — disable if you'd rather click CLAIM in Discord's Quests page manually.",
         default: false,
     },
 
