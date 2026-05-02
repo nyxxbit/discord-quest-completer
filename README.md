@@ -21,9 +21,10 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 > [!WARNING]
 > **Vanilla Discord Stable is partially incompatible.** A recent Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache post-boot.
 >
-> **Workarounds (v4.6+):**
-> 1. **Use [Vencord](https://vencord.dev/)** &mdash; Orion auto-detects Vencord and uses its boot-time injected Webpack API to fully restore functionality on Stable.
-> 2. Or use **[Discord Canary](https://canary.discord.com/download)** (without mods), where the native extraction still works.
+> **Workarounds (any of these works on Stable):**
+> 1. **Paste the userscript with [Vencord](https://vencord.dev/) installed** &mdash; Orion v4.6+ auto-detects Vencord and uses its boot-time-injected Webpack API to restore full functionality.
+> 2. **Install the [OrionQuests Vencord userplugin](vencord-plugin/)** &mdash; no console pasting, runs at Discord boot, exposes `/orion start|stop|status` slash commands. Best long-term option for Stable users.
+> 3. Or use **[Discord Canary](https://canary.discord.com/download)** (vanilla, no mods), where the native userscript extraction still works.
 
 ---
 
