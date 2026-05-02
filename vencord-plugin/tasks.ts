@@ -357,12 +357,14 @@ export class TaskRunner {
 
     private findChannel(): string | null {
         try {
-            return (
-                this.stores.ChanStore?.getSortedPrivateChannels()?.[0]?.id ??
-                Object.values(this.stores.GuildChanStore?.getAllGuilds() ?? {})
-                    .find((g: any) => g?.VOCAL?.length)?.VOCAL?.[0]?.channel?.id ??
-                null
-            );
+            const dmChan = this.stores.ChanStore?.getSortedPrivateChannels()?.[0]?.id;
+            if (dmChan) return dmChan;
+            const guilds = this.stores.GuildChanStore?.getAllGuilds() ?? {};
+            for (const g of Object.values<any>(guilds)) {
+                const voiceChan = g?.VOCAL?.[0]?.channel?.id;
+                if (voiceChan) return voiceChan;
+            }
+            return null;
         } catch (e: any) {
             logger.debug(`[Task] Channel lookup error: ${e?.message}`);
             return null;
