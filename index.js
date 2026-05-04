@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.6 (Enterprise)",
+        VERSION: "v4.6.1 (Enterprise)",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -54,12 +54,12 @@
                     o.frequency.setValueAtTime(523.25, t0);
                     o.frequency.setValueAtTime(659.25, t0 + 0.12);
                     o.frequency.setValueAtTime(783.99, t0 + 0.24);
-                    g.gain.setValueAtTime(0.18, t0);
+                    g.gain.setValueAtTime(0.55, t0);
                     g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
                     o.start(t0); o.stop(t0 + 0.6);
                 } else {
                     o.frequency.value = 880; // A5
-                    g.gain.setValueAtTime(0.12, t0);
+                    g.gain.setValueAtTime(0.45, t0);
                     g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
                     o.start(t0); o.stop(t0 + 0.2);
                 }

@@ -173,6 +173,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 
 ## Changelog
 
+### v4.6.1
+- **Louder completion sound** &mdash; Bumped the gain on the quest-completion ping (0.12 &rarr; 0.45) and arpeggio (0.18 &rarr; 0.55). Headphone users were complaining the tone was inaudible.
+
 ### v4.6
 - **Vencord integration** &mdash; `loadModules` now uses `window.Vencord.Webpack` directly when Vencord is installed. Restores full functionality on modern Discord Stable, where the native chunk push hook can no longer reach the live module cache. Resolves [#20](https://github.com/nyxxbit/discord-quest-completer/issues/20)
 - **Sentry-proof native extraction** &mdash; The push callback fires once per registered runtime; Discord ships Sentry's stripped runtime alongside the real one. The capture now picks the require with the largest `.c`, ignoring Sentry's tiny instance. Resolves [#23](https://github.com/nyxxbit/discord-quest-completer/issues/23) and [#26](https://github.com/nyxxbit/discord-quest-completer/issues/26)
