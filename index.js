@@ -19,7 +19,8 @@
     const SYS = Object.freeze({
         MAX_TIME: 25 * 60 * 1000,       // hard abort per task (25 min)
         MAX_TASK_FAILURES: 5,           // consecutive network failures
-        MAX_RETRIES: 3                  // 429/5xx transient error retries
+        MAX_RETRIES: 3,                 // 429/5xx transient error retries
+        IS_DESKTOP: typeof window.DiscordNative !== 'undefined'
     });
 
     // mutable runtime state lives here, CONFIG stays read-only
@@ -554,6 +555,8 @@
 
                     const typeData = Tasks.detectType(cfg, q.config?.application?.id);
                     if (!typeData) return;
+                    // exclude desktop-only quests (play/stream) on any non-desktop clients
+                    if (!SYS.IS_DESKTOP && (typeData.type === 'GAME' || typeData.type === 'STREAM')) return;
 
                     const rw = q.config?.rewardsConfig?.rewards?.[0];
                     const rewardType = rw?.type ?? 0;
@@ -1564,6 +1567,11 @@
                         const typeData = Tasks.detectType(cfg, q.config?.application?.id);
                         if (!typeData) {
                             Logger.log(`[Quest] Unknown task type: ${q.config?.messages?.questName ?? q.id}`, 'warn');
+                            return;
+                        }
+
+                        if (!SYS.IS_DESKTOP && (typeData.type === 'GAME' || typeData.type === 'STREAM')) {
+                            Logger.log(`[Quest] "${q.config?.messages?.questName}" requires desktop app. Skipping.`, 'warn');
                             return;
                         }
 
