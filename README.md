@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.6
+**Auto-complete every Discord Quest in seconds** &mdash; v4.6.2
 
-[![Version](https://img.shields.io/badge/v4.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.6.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -42,7 +42,7 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ## Quick start
 
 > [!IMPORTANT]
-> **Discord Desktop client only.** Orion hooks into Discord's internal webpack stores, which are only exposed in the desktop app (Stable, PTB, or Canary). It will **not** work in browser Discord, mobile Discord, or any web-based client &mdash; even with DevTools or script-injection extensions like Kiwi Browser. `GAME` and `STREAM` quests in particular are impossible outside the desktop client.
+> **Partial Browser/Mobile Support.** Orion runs in Discord web version or on mobile browsers Discord (via script-injection extensions like Kiwi Browser) for web-compatible quests (e.g., Video, Activity). However, `GAME` and `STREAM` quests are automatically filtered out as they are **impossible** outside the Discord Desktop client.
 
 **1.** Open Discord ([Canary](https://canary.discord.com/download) recommended &mdash; console enabled by default)
 
@@ -86,13 +86,13 @@ QuestStore → filter incomplete → JIT enroll → dispatch tasks → poll prog
 
 ## Dashboard
 
-Draggable overlay with persistent position. Live-sorts tasks so you always see what matters:
+Draggable overlay styled to match native Discord design. Live-sorts tasks so you always see what matters:
 
 | Priority | State | Visual |
 |----------|-------|--------|
-| 1st | **Running** (highest progress first) | Blue accent, animated progress bar |
+| 1st | **Running** (highest progress first) | Blue accent, circular progress bar |
 | 2nd | **Queued** | Orange accent, dimmed |
-| 3rd | **Completed** | Green checkmark + Interactive CLAIM button if manual action needed |
+| 3rd | **Completed** / **Action Required** | Green checkmark + Interactive CLAIM or ACTION REQUIRED buttons |
 
 Desktop notifications fire on each quest completion.
 
@@ -172,6 +172,13 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.6.2
+- **Native UI overhaul** &mdash; Replaced hardcoded hex colors with Discord's native CSS variables. The widget now automatically adapts to Light, Dark, AMOLED, and custom themes.
+- **Circular progress & decluttering** &mdash; Switched linear progress bars to circular indicators (hover to see exact percentages). Completed quests now hide unnecessary text to keep the interface clean.
+- **Desktop environment guard** &mdash; The script now checks for `window.DiscordNative`. Game and Stream quests are automatically hidden and skipped if you run the script in a web browser.
+- **Removed window position saving** &mdash; Dropped `localStorage` usage for tracking the widget's coordinates to fix console spam and `window.localStorage is undefined` errors on newer Discord builds where storage access is restricted.
+- **Optimistic UI & under-the-hood fixes** &mdash; Added a local ticker for smooth visual progress updates.
 
 ### v4.6.1
 - **Louder completion sound** &mdash; Bumped the gain on the quest-completion ping (0.12 &rarr; 0.45) and arpeggio (0.18 &rarr; 0.55). Headphone users were complaining the tone was inaudible.
