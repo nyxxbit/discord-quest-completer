@@ -153,7 +153,7 @@
                 
                 #orion-head { padding: 12px 16px; background: var(--background-mod-muted); flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); cursor: grab; }
                 #orion-head.dragging { cursor: grabbing; background: var(--control-secondary-background-default); }
-                #orion-title { font-weight: 700; font-size: 14px; color: var(--text-strong, #fff); display: flex; align-items: center; gap: 8px; }
+                #orion-title { font-weight: 700; font-size: 15px; color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
                 #orion-title svg { color: var(--text-brand); }
                 
                 #orion-controls { display: flex; gap: 10px; align-items: center; }
@@ -261,7 +261,10 @@
             this.root.id = 'orion-ui';
             this.root.innerHTML = `
                 <div id="orion-head">
-                    <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME} <span style="opacity:0.6; font-size:10px; margin-left:2px; padding-top: 3px; font-weight:500;">${CONFIG.VERSION}</span></span>
+                    <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME}
+                        <span style="font-size:12px; margin-left:-4px; padding-top:2px; font-weight:500;">by syntt_</span>
+                        <span style="opacity:0.6; font-size:10px; margin-left:4px; padding-top: 3px; font-weight:500;">${CONFIG.VERSION}</span>
+                    </span>
                     <div id="orion-controls">
                         <span class="ctrl-btn ctrl-stop" id="orion-stop" title="Stop script">${ICONS.STOP} STOP</span>
                         <span class="ctrl-btn ctrl-hide" id="orion-close" title="Shift + .">HIDE</span>
