@@ -136,11 +136,10 @@ Current notable choices (all already in code, not proposals):
 
 ## Compatibility
 
-- **Discord Desktop only** (Stable, PTB, Canary). The script needs either `window.webpackChunkdiscord_app` or `window.Vencord`, which are only present in the Electron client.
+- **Discord Desktop** (Stable, PTB, Canary).
 - **Vanilla Stable Notice**: Vanilla Discord Stable no longer exposes the live webpack cache post-boot. Users on the Stable branch must have **Vencord** installed for the script to work via the DevTools console.
 - **Canary / PTB**: Native extraction still works without mods.
-- **Browsers** (Chrome, Kiwi, etc.) do not expose webpack chunks the same way → script exits with "Core modules not found".
-- **Mobile clients** are out of scope and will remain so.
+- **Browsers & Script-injection compatible mobile browsers** (Chrome, Kiwi Browser, etc.): Supported for web-compatible quests. Desktop-only quests (`GAME`, `STREAM`) are automatically filtered out using the `SYS.IS_DESKTOP` flag.
 
 ## Vencord plugin (`vencord-plugin/`)
 
