@@ -262,7 +262,7 @@
             this.root.innerHTML = `
                 <div id="orion-head">
                     <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME}
-                        <span style="font-size:12px; margin-left:-4px; padding-top:2px; font-weight:500;">by syntt_</span>
+                        <a href="https://discord.com/users/1419678867005767783" target="_blank" style="font-size:12px; margin-left:-4px; padding-top:2px; font-weight:500; color:var(--text-muted); text-decoration:none;" onmouseover="this.style.color='var(--text-default)'" onmouseout="this.style.color='var(--text-muted)'">by syntt_</a>
                         <span style="opacity:0.6; font-size:10px; margin-left:4px; padding-top: 3px; font-weight:500;">${CONFIG.VERSION}</span>
                     </span>
                     <div id="orion-controls">
