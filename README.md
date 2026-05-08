@@ -18,6 +18,11 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 
 ---
 
+> [!CAUTION]
+> **Discord is actively cracking down on quest automation (April 2026+).** Some users have received system messages flagging their accounts after running automation tools (any tool — not just this one). The risk has shifted from theoretical to real. Use at your own discretion. Honest summary of the trade-off: faster Orbs vs. a non-zero chance of a quest-rewards strike on your account.
+
+---
+
 > [!WARNING]
 > **Vanilla Discord Stable is partially incompatible.** A recent Stable build changed the webpack runtime so `webpackChunkdiscord_app.push` no longer exposes the live module cache post-boot.
 >
@@ -30,12 +35,13 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 
 ## Why Orion?
 
-- **Completes ALL quest types** &mdash; Video, Game, Stream, Activity, and the new Achievement quests
-- **Auto-claiming** &mdash; Claim rewards directly from the dashboard. Tries to claim automatically (if enabled), or provides a smart interactive button if captcha is needed
-- **Resilient module loader** &mdash; finds Discord stores by class name, not minified paths. Survives Discord updates
-- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, randomized polling intervals. Distinguishes between global and endpoint limits, non-blocking retries
-- **Fault-tolerant execution** &mdash; One failed quest won't break the queue (`Promise.allSettled`)
-- **Zero setup** &mdash; single paste into the console. No Node.js, no npm, no extensions
+- **Covers all 5 quest types** &mdash; PLAY, STREAM, VIDEO, ACTIVITY, and ACHIEVEMENT_IN_ACTIVITY. Most other tools only handle PLAY (game-time) quests.
+- **Userscript and Vencord plugin in one repo** &mdash; pick whichever fits your setup. Both share the same engine, both kept in sync.
+- **Auto-claiming** &mdash; Claim rewards directly from the dashboard. Tries to claim automatically (if enabled), or provides a smart interactive button if captcha is needed.
+- **Resilient module loader** &mdash; finds Discord stores by class name, not minified paths. Dual extraction path (Vencord API + native fallback) survives Discord webpack changes.
+- **Smart rate limiting** &mdash; exponential backoff on 429/5xx, skip-list for dead quests, randomized polling intervals. Distinguishes between global and endpoint limits, non-blocking retries.
+- **Fault-tolerant execution** &mdash; One failed quest won't break the queue (`Promise.allSettled`).
+- **Zero setup** &mdash; single paste into the console. No Node.js, no npm, no extensions.
 
 ---
 
@@ -162,6 +168,24 @@ index.js
 Unlike other scripts that break on every Discord update, Orion finds stores by their **class name** (`QuestStore`, `RunningGameStore`, etc.) via `constructor.displayName`. The Dispatcher is found by structural signature (`_subscriptions` + `subscribe` + `dispatch`), and the API client by its unique `.del` method. No hardcoded minified paths.
 
 For a full internal tour of the script, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+---
+
+## Alternatives
+
+Orion isn't the only tool in this space. If our approach doesn't fit your setup, these projects might:
+
+- **[markterence/discord-quest-completer](https://github.com/markterence/discord-quest-completer)** &mdash; Native Windows app (Tauri/Rust + Vue). Creates dummy game executables that satisfy Discord's process detection without injecting into the client at all. **Most resilient long-term** because it doesn't depend on Discord internals. Trade-off: **PLAY quests only** (no VIDEO/STREAM/ACTIVITY/ACHIEVEMENT support), Windows-only, requires WebView2.
+- **[nicola02nb/completeDiscordQuest](https://github.com/nicola02nb/completeDiscordQuest)** &mdash; Vencord plugin (also a BetterDiscord port available). Smaller and simpler than ours, port of [aamiaa's original snippet](https://gist.github.com/aamiaa/204cd9d42013ded9faf646fae7f89fbb) that started this whole space. Mature (online since Sep 2025).
+- **[nvckai/Discord-Web-Auto-Quest-Extension](https://github.com/nvckai/Discord-Web-Auto-Quest-Extension)** &mdash; Chrome extension. One-click install but VIDEO-focused.
+
+Why Orion if these exist:
+
+- We're the **only** tool covering all 5 quest types with one codebase.
+- Userscript + Vencord plugin **share the same engine** in this repo, so behavior matches across install paths.
+- Active development (multiple releases per month, community PRs merged on the same day they land).
+
+Honest disclosure: we depend on Discord's webpack/internals. Every Discord update has a chance of breaking us. markterence's process-injection approach is structurally less brittle for users who only need PLAY quests.
 
 ---
 
