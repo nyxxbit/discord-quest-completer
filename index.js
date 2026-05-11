@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.6.2",
+        VERSION: "v4.6.3",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -155,6 +155,7 @@
                 #orion-head.dragging { cursor: grabbing; background: var(--control-secondary-background-default); }
                 #orion-title { font-weight: 700; font-size: 15px; color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
                 #orion-title svg { color: var(--text-brand); }
+                .dev-credit { font-size: 12px; margin-left: -4px; padding-top: 2px; font-weight: 500; color: var(--text-muted); }
                 
                 #orion-controls { display: flex; gap: 10px; align-items: center; }
                 .ctrl-btn { cursor: pointer; transition: 0.2s; display: flex; align-items: center; }
@@ -262,7 +263,7 @@
             this.root.innerHTML = `
                 <div id="orion-head">
                     <span id="orion-title">${ICONS.BOLT} ${CONFIG.NAME}
-                        <a href="https://discord.com/users/1419678867005767783" target="_blank" style="font-size:12px; margin-left:-4px; padding-top:2px; font-weight:500; color:var(--text-muted); text-decoration:none;" onmouseover="this.style.color='var(--text-default)'" onmouseout="this.style.color='var(--text-muted)'">by syntt_</a>
+                        <span class="dev-credit">by syntt_</span>
                         <span style="opacity:0.6; font-size:10px; margin-left:4px; padding-top: 3px; font-weight:500;">${CONFIG.VERSION}</span>
                     </span>
                     <div id="orion-controls">
