@@ -50,6 +50,13 @@ export const settings = definePluginSettings({
         default: 2,
     },
 
+    playSound: {
+        type: OptionType.BOOLEAN,
+        description:
+            "Play a soft tone after each quest completes and a 3-note arpeggio when the whole queue finishes. Useful when running with auto-claim off so you can come back to claim before the captcha times out.",
+        default: false,
+    },
+
     verboseLogging: {
         type: OptionType.BOOLEAN,
         description:

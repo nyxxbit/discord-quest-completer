@@ -21,6 +21,43 @@ import { rnd, sleep } from "./util";
 
 const logger = new Logger("OrionQuests");
 
+// `window.DiscordNative` is exposed by Discord's Electron preload; absent in
+// the web/Vencord-Web build. GAME/STREAM quests need the desktop process-
+// injection path, so we skip them silently when running in a browser context.
+const IS_DESKTOP = typeof (window as any).DiscordNative !== "undefined";
+
+// Tiny Web Audio synth that mirrors the userscript's Sound module. 'tick'
+// fires after each quest completes; 'done' fires when the whole queue is
+// finished. Soft-fails on environments without AudioContext.
+const Sound = {
+    play(type: "tick" | "done"): void {
+        if (!settings.store.playSound) return;
+        try {
+            const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+            if (!Ctx) return;
+            const ctx = new Ctx();
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.type = "sine";
+            const t0 = ctx.currentTime;
+            if (type === "done") {
+                o.frequency.setValueAtTime(523.25, t0);
+                o.frequency.setValueAtTime(659.25, t0 + 0.12);
+                o.frequency.setValueAtTime(783.99, t0 + 0.24);
+                g.gain.setValueAtTime(0.55, t0);
+                g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
+                o.start(t0); o.stop(t0 + 0.6);
+            } else {
+                o.frequency.value = 880;
+                g.gain.setValueAtTime(0.45, t0);
+                g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
+                o.start(t0); o.stop(t0 + 0.2);
+            }
+        } catch (_) { /* audio unavailable, ignore */ }
+    }
+};
+
 // Status of a task as surfaced to UI consumers (dashboard, slash commands).
 export interface DashboardEntry {
     id: string;
@@ -114,6 +151,7 @@ async function runConcurrent(taskFns: Array<() => Promise<any>>, limit: number):
 async function onTaskComplete(q: Quest, t: TaskInfo): Promise<void> {
     setEntry(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
     logger.info(`[Task] Completed "${t.name}"!`);
+    Sound.play("tick");
 
     // browser notification
     try {
@@ -159,6 +197,7 @@ async function mainLoop(): Promise<void> {
 
             if (!active.length) {
                 logger.info("[System] All available quests are completed!");
+                Sound.play("done");
                 break;
             }
 
@@ -174,6 +213,10 @@ async function mainLoop(): Promise<void> {
                     const detected = tasks!.detectType(cfg, q.config?.application?.id);
                     if (!detected) {
                         logger.warn(`[Quest] Unknown task type: ${q.config?.messages?.questName ?? q.id}`);
+                        continue;
+                    }
+                    if (!IS_DESKTOP && (detected.type === "GAME" || detected.type === "STREAM")) {
+                        logger.warn(`[Quest] "${q.config?.messages?.questName ?? q.id}" requires desktop app. Skipping.`);
                         continue;
                     }
                     const { type, keyName, target } = detected;
