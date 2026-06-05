@@ -64,6 +64,7 @@
     };
 
     const ICONS = Object.freeze({
+		OPT: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10.56 1.1c-.46.05-.7.53-.64.98.18 1.16-.19 2.2-.98 2.53-.8.33-1.79-.15-2.49-1.1-.27-.36-.78-.52-1.14-.24-.77.59-1.45 1.27-2.04 2.04-.28.36-.12.87.24 1.14.96.7 1.43 1.7 1.1 2.49-.33.8-1.37 1.16-2.53.98-.45-.07-.93.18-.99.64a11.1 11.1 0 0 0 0 2.88c.06.46.54.7.99.64 1.16-.18 2.2.19 2.53.98.33.8-.14 1.79-1.1 2.49-.36.27-.52.78-.24 1.14.59.77 1.27 1.45 2.04 2.04.36.28.87.12 1.14-.24.7-.95 1.7-1.43 2.49-1.1.8.33 1.16 1.37.98 2.53-.07.45.18.93.64.99a11.1 11.1 0 0 0 2.88 0c.46-.06.7-.54.64-.99-.18-1.16.19-2.2.98-2.53.8-.33 1.79.14 2.49 1.1.27.36.78.52 1.14.24.77-.59 1.45-1.27 2.04-2.04.28-.36.12-.87-.24-1.14-.96-.7-1.43-1.7-1.1-2.49.33-.8 1.37-1.16 2.53-.98.45.07.93-.18.99-.64a11.1 11.1 0 0 0 0-2.88c-.06-.46-.54-.7-.99-.64-1.16.18-2.2-.19-2.53-.98-.33-.8.14-1.79 1.1-2.49.36-.27.52-.78.24-1.14a11.07 11.07 0 0 0-2.04-2.04c-.36-.28-.87-.12-1.14.24-.7.96-1.7 1.43-2.49 1.1-.8-.33-1.16-1.37-.98-2.53.07-.45-.18-.93-.64-.99a11.1 11.1 0 0 0-2.88 0ZM16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg>`,
         BOLT: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.29-.62L14.5 3h1l-1 7h3.5c.58 0 .57.32.29.62L11 21z"/></svg>`,
         VIDEO: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>`,
         GAME: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`,
@@ -144,11 +145,11 @@
                     max-height: 53vh;
                     background: var(--background-base-low); color: var(--text-default);
                     border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
-                    box-shadow: var(--shadow-button-overlay); z-index: 99999;
+                    box-shadow: var(--shadow-button-overlay); z-index: 1001;
                     font-family: var(--font-primary);
                     overflow: hidden; animation: slideIn 0.3s ease; 
                     display: flex; flex-direction: column; box-sizing: border-box;
-                    user-select: none;
+                    user-select: none;-webkit-app-region: no-drag;
                 }
 
                 #orion-head { padding: 12px 16px; background: var(--background-mod-muted); flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); cursor: grab; }
@@ -159,8 +160,8 @@
 
                 #orion-controls { display: flex; gap: 10px; align-items: center; }
                 .ctrl-btn { cursor: pointer; transition: 0.2s; display: flex; align-items: center; }
-                .ctrl-hide { font-size: 11px; font-weight: 600; color: var(--text-muted); }
-                .ctrl-hide:hover { color: var(--text-default); }
+                .ctrl-hide, .ctrl-opts { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+                .ctrl-hide:hover, .ctrl-opts:hover { color: var(--text-default); }
                 .ctrl-stop { font-size: 11px; font-weight: 700; gap: 4px; padding: 3px 8px 3px 6px; border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--control-critical-primary-background-default); color: var(--control-critical-primary-background-default); }
                 .ctrl-stop:hover { background: var(--control-critical-primary-background-default); color: #fff; }
 
@@ -269,6 +270,7 @@
                     <div id="orion-controls">
                         <span class="ctrl-btn ctrl-stop" id="orion-stop" title="Stop script">${ICONS.STOP} STOP</span>
                         <span class="ctrl-btn ctrl-hide" id="orion-close" title="Shift + .">HIDE</span>
+                        <span class="ctrl-btn ctrl-opts" id="orion-opts" title="Options">${ICONS.OPT}</span>
                     </div>
                 </div>
                 <div id="orion-body"><div style="text-align:center; padding:30px; color:var(--text-muted); font-size:12px; font-weight:500;">Initializing System...</div></div>
@@ -616,18 +618,26 @@
 
                 body.innerHTML = `
                     <form id="orion-picker-form">
-                        ${rewardTypes.size > 1 ? `
-                            <div class="picker-section-title">Filter By Reward</div>
-                            <div class="reward-filters">
-                                ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="color: ${rt.color}; border-color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
+                        <div id="orion-options-panel" style="display:none;">
+                            ${rewardTypes.size > 1 ? `
+                                <div class="picker-section-title">Filter By Reward</div>
+                                <div class="reward-filters">
+                                    ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="color: ${rt.color}; border-color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
+                                </div>
+                            ` : ''}
+                            ${questTypes.size > 1 ? `
+                                <div class="picker-section-title">Filter By Type</div>
+                                <div class="reward-filters">
+                                    ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}">${t}</button>`).join('')}
+                                </div>
+                            ` : ''}
+                            <div class="picker-section-title">Options</div>
+                            <div class="picker-options">
+                                ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
+                                ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
+                                ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
                             </div>
-                        ` : ''}
-                        ${questTypes.size > 1 ? `
-                            <div class="picker-section-title">Filter By Type</div>
-                            <div class="reward-filters">
-                                ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}">${t}</button>`).join('')}
-                            </div>
-                        ` : ''}
+                        </div>
 
                         <div id="orion-quest-list" class="picker-quest-list">${items.map(buildCard).join('')}
                             <div id="orion-no-quests" style="display: none; margin: auto; text-align: center; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
@@ -635,18 +645,16 @@
                             </div>
                         </div>
 
-                        <div class="picker-section-title">Options</div>
-                        <div class="picker-options">
-                            ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
-                            ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
-                            ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
-                        </div>
-
                         <div class="picker-actions">
                             <button type="button" class="quest-pick-btn deselect" id="select-all-btn">DESELECT ALL</button>
                             <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} <span id="start-btn-text">START (${items.length})</span></button>
                         </div>
                     </form>`;
+
+                document.getElementById('orion-opts').addEventListener('click', () => {
+                    const panel = document.getElementById('orion-options-panel');
+                    panel.style.display = panel.style.display === 'none' ? '' : 'none';
+                });
 
                 const form = document.getElementById('orion-picker-form');
                 const selectAllBtn = document.getElementById('select-all-btn');
