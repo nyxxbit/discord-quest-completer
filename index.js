@@ -64,6 +64,7 @@
     };
 
     const ICONS = Object.freeze({
+		OPT: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10.56 1.1c-.46.05-.7.53-.64.98.18 1.16-.19 2.2-.98 2.53-.8.33-1.79-.15-2.49-1.1-.27-.36-.78-.52-1.14-.24-.77.59-1.45 1.27-2.04 2.04-.28.36-.12.87.24 1.14.96.7 1.43 1.7 1.1 2.49-.33.8-1.37 1.16-2.53.98-.45-.07-.93.18-.99.64a11.1 11.1 0 0 0 0 2.88c.06.46.54.7.99.64 1.16-.18 2.2.19 2.53.98.33.8-.14 1.79-1.1 2.49-.36.27-.52.78-.24 1.14.59.77 1.27 1.45 2.04 2.04.36.28.87.12 1.14-.24.7-.95 1.7-1.43 2.49-1.1.8.33 1.16 1.37.98 2.53-.07.45.18.93.64.99a11.1 11.1 0 0 0 2.88 0c.46-.06.7-.54.64-.99-.18-1.16.19-2.2.98-2.53.8-.33 1.79.14 2.49 1.1.27.36.78.52 1.14.24.77-.59 1.45-1.27 2.04-2.04.28-.36.12-.87-.24-1.14-.96-.7-1.43-1.7-1.1-2.49.33-.8 1.37-1.16 2.53-.98.45.07.93-.18.99-.64a11.1 11.1 0 0 0 0-2.88c-.06-.46-.54-.7-.99-.64-1.16.18-2.2-.19-2.53-.98-.33-.8.14-1.79 1.1-2.49.36-.27.52-.78.24-1.14a11.07 11.07 0 0 0-2.04-2.04c-.36-.28-.87-.12-1.14.24-.7.96-1.7 1.43-2.49 1.1-.8-.33-1.16-1.37-.98-2.53.07-.45-.18-.93-.64-.99a11.1 11.1 0 0 0-2.88 0ZM16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/></svg>`,
         BOLT: `<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11 21h-1l1-7H7.5c-.58 0-.57-.32-.29-.62L14.5 3h1l-1 7h3.5c.58 0 .57.32.29.62L11 21z"/></svg>`,
         VIDEO: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M10 16.5l6-4.5-6-4.5v9zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>`,
         GAME: `<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>`,
@@ -138,41 +139,41 @@
             style.innerHTML = `
                 @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
                 @keyframes fadeOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.95); margin: 0; padding: 0; height: 0; border: none; } }
-                
+
                 #orion-ui {
                     position: fixed; top: 32px; left: auto; right: 20px; width: 380px;
                     max-height: 53vh;
                     background: var(--background-base-low); color: var(--text-default);
                     border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
-                    box-shadow: var(--shadow-button-overlay); z-index: 99999;
+                    box-shadow: var(--shadow-button-overlay); z-index: 1001;
                     font-family: var(--font-primary);
                     overflow: hidden; animation: slideIn 0.3s ease; 
                     display: flex; flex-direction: column; box-sizing: border-box;
-                    user-select: none;
+                    user-select: none;-webkit-app-region: no-drag;
                 }
-                
+
                 #orion-head { padding: 12px 16px; background: var(--background-mod-muted); flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-subtle); cursor: grab; }
                 #orion-head.dragging { cursor: grabbing; background: var(--control-secondary-background-default); }
                 #orion-title { font-weight: 700; font-size: 15px; color: var(--text-strong); display: flex; align-items: center; gap: 8px; }
                 #orion-title svg { color: var(--text-brand); }
                 .dev-credit { font-size: 12px; margin-left: -4px; padding-top: 2px; font-weight: 500; color: var(--text-muted); }
-                
+
                 #orion-controls { display: flex; gap: 10px; align-items: center; }
                 .ctrl-btn { cursor: pointer; transition: 0.2s; display: flex; align-items: center; }
-                .ctrl-hide { font-size: 11px; font-weight: 600; color: var(--text-muted); }
-                .ctrl-hide:hover { color: var(--text-default); }
+                .ctrl-hide, .ctrl-opts { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+                .ctrl-hide:hover, .ctrl-opts:hover { color: var(--text-default); }
                 .ctrl-stop { font-size: 11px; font-weight: 700; gap: 4px; padding: 3px 8px 3px 6px; border-radius: var(--radius-sm); background: transparent; border: 1px solid var(--control-critical-primary-background-default); color: var(--control-critical-primary-background-default); }
                 .ctrl-stop:hover { background: var(--control-critical-primary-background-default); color: #fff; }
-                
+
                 #orion-logs { padding: 10px 14px; background: var(--background-base-lower); flex: 0 0 auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 11px; height: 110px; overflow-y: auto; border-top: 1px solid var(--border-subtle); scroll-behavior: smooth; }
                 .log-item { margin-bottom: 6px; display: flex; gap: 8px; line-height: 1.4; padding-bottom: 4px; }
                 .log-ts { opacity: 0.5; min-width: 50px; font-size: 10px; }
                 .c-info { color: var(--text-feedback-info); opacity: .8; } .c-success { color: var(--text-feedback-positive); } .c-err { color: var(--text-feedback-critical); } .c-warn { color: var(--text-feedback-warning); } .c-debug { color: #949ba4; }
-                
+
                 #orion-body { flex: 1 1 auto; padding: 12px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
-                
+
                 #orion-picker-form { display: flex; flex-direction: column; min-height: 0; }
-                
+
                 #orion-ui ::-webkit-scrollbar { width: 4px; height: 4px; }
                 #orion-ui ::-webkit-scrollbar-track { background: transparent; }
                 #orion-ui ::-webkit-scrollbar-thumb { background: var(--scrollbar-auto-scrollbar-color-thumb); border-radius: 4px; }
@@ -181,7 +182,7 @@
                     --state-color: var(--ansi-bright-blue);
                     --icon-bg-opacity: 15%;
                     --icon-color: var(--state-color);
-                    
+
                     display: flex; gap: 12px; padding: 10px 12px; margin-bottom: 8px; align-items: center;
                     background: var(--control-secondary-background-default); 
                     border-radius: var(--radius-sm); border: 1px solid var(--border-muted); 
@@ -192,23 +193,23 @@
                 .task-card.done { --state-color: var(--ansi-green); --icon-bg-opacity: 100%; --icon-color: #fff; }
                 .task-card.failed { --state-color: var(--ansi-red); }
                 .task-card.pending { --state-color: var(--ansi-bright-yellow); }
-                
+
                 .task-icon { position: relative; width: 40px; height: 40px; border-radius: 50%; flex: 0 0 auto; background-color: color-mix(in srgb, var(--state-color) var(--icon-bg-opacity), transparent); display: flex; align-items: center; justify-content: center; }
-                
+
                 .task-card.running .task-icon::before { content: ''; position: absolute; inset: 0; border-radius: 50%; z-index: 1; background: conic-gradient(lch(71 59 139) 0% var(--p, 0%), var(--border-subtle) var(--p, 0%) 100%); -webkit-mask-image: radial-gradient(circle at center, transparent 16px, black 17px); mask-image: radial-gradient(circle at center, transparent 16px, black 17px); }
-                
+
                 .task-icon-inner { z-index: 2; color: var(--icon-color); display: flex; transition: filter 0.2s, opacity 0.2s; }
                 .task-card.running:hover .task-icon-inner { filter: blur(2px); opacity: 0.3; }
-                
+
                 .task-icon-overlay { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--text-default); opacity: 0; transition: opacity 0.2s; pointer-events: none; }
                 .task-card.running:hover .task-icon-overlay { opacity: 1; }
-                
+
                 .task-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; justify-content: center; }
                 .task-status { font-size: 10px; font-weight: 800; color: var(--state-color); text-transform: uppercase; letter-spacing: 0.5px; }
                 .task-name { font-size: 13px; font-weight: 700; color: var(--text-strong); letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
                 .task-meta { font-size: 11px; font-weight: 700; color: var(--text-muted); display: flex; justify-content: space-between; }
                 .task-actions { flex: 0 0 auto; display: flex; align-items: center; margin-left: 4px; }
-                
+
                 .claim-btn, .goto-btn { padding: 6px 10px; border: none; border-radius: var(--radius-sm); font-size: 11px; font-weight: 700; cursor: pointer; transition: 0.2s; text-transform: uppercase; letter-spacing: 0.2px; white-space: nowrap; font-family: inherit; color: #fff; }
                 .claim-btn { background: var(--control-connected-background-default); }
                 .claim-btn:hover:not(:disabled) { background: var(--control-connected-background-hover); }
@@ -216,20 +217,20 @@
                 .claim-btn.failed { background: var(--control-secondary-background-active); color: var(--text-default); }
                 .goto-btn { background: var(--control-primary-background-default); }
                 .goto-btn:hover:not(:disabled) { background: var(--control-primary-background-hover); }
-                
+
                 .picker-section-title { font-size: 11px; font-weight: 700; color: var(--text-muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
                 .reward-filters { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; flex-shrink: 0; }
-                
+
                 .reward-filter, .type-filter { background-color: transparent; border: 2px solid; padding: 4px 10px; border-radius: 24px; font-size: 10px; font-weight: 600; cursor: pointer; transition: 0.2s; color: var(--text-subtle); font-family: inherit; }
                 .reward-filter:hover, .type-filter:hover { background-color: color-mix(in srgb, currentColor 25%, transparent); }
                 .reward-filter.off, .type-filter.off { background: transparent; color: var(--text-muted); opacity: 0.4; }
-                
+
                 .picker-quest-list { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 50px; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; }
-                
+
                 .quest-pick { display: flex; gap: 12px; padding: 10px; background: var(--control-secondary-background-default); border-radius: var(--radius-sm); border: 1px solid var(--border-muted); border-left-width: 4px; cursor: pointer; transition: 0.2s; align-items: center; user-select: none; flex-shrink: 0; }
                 .quest-pick:hover { filter: brightness(1.15); }
                 .quest-pick.hidden { display: none !important; }
-                
+
                 .native-cb { appearance: none; width: 20px; height: 20px; margin: 0; flex-shrink: 0; border: 1px solid var(--checkbox-border-default); border-radius: var(--radius-xs); background: transparent; cursor: pointer; transition: 0.15s; display: grid; place-content: center; }
                 .native-cb::before {
                     content: ''; width: 12px; height: 12px; opacity: 0; transition: 0.1s;
@@ -238,16 +239,16 @@
                 }
                 .native-cb:checked { background: var(--checkbox-background-selected-default); border-color: var(--checkbox-border-selected-default); }
                 .native-cb:checked::before { opacity: 1; }
-                
+
                 .picker-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; flex-shrink: 0; }
                 .orion-option { display: flex; justify-content: space-between; align-items: center; background: var(--control-secondary-background-default); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-muted); }
                 .orion-option-label { font-size: 13px; font-weight: 500; color: var(--text-default); }
-                
+
                 .native-toggle { appearance: none; width: 40px; height: 20px; margin: 0; flex-shrink: 0; background: var(--control-secondary-background-default); border-radius: 12px; cursor: pointer; position: relative; transition: 0.2s; border: 1px solid var(--border-muted); }
                 .native-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: white; border-radius: 50%; box-shadow: var(--shadow-low); transition: 0.2s; }
                 .native-toggle:checked { background: var(--control-primary-background-default); }
                 .native-toggle:checked::after { transform: translateX(20px); }
-                
+
                 .picker-actions { display: flex; gap: 10px; border-top: 1px solid var(--border-subtle); padding-top: 8px; flex-shrink: 0; }
                 .quest-pick-btn { flex: 1; padding: 10px; border: 1px solid; border-radius: var(--radius-sm, 8px); font-size: 13px; font-weight: 700; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px; font-family: inherit; color: #fff;}
                 .quest-pick-btn.start { background-color: var(--control-connected-background-default); border-color: var(--control-connected-border-default); }
@@ -269,6 +270,7 @@
                     <div id="orion-controls">
                         <span class="ctrl-btn ctrl-stop" id="orion-stop" title="Stop script">${ICONS.STOP} STOP</span>
                         <span class="ctrl-btn ctrl-hide" id="orion-close" title="Shift + .">HIDE</span>
+                        <span class="ctrl-btn ctrl-opts" id="orion-opts" title="Options">${ICONS.OPT}</span>
                     </div>
                 </div>
                 <div id="orion-body"><div style="text-align:center; padding:30px; color:var(--text-muted); font-size:12px; font-weight:500;">Initializing System...</div></div>
@@ -277,23 +279,31 @@
             document.body.appendChild(this.root);
 
             const head = document.getElementById('orion-head');
+
+            let collapsed = false;
+            head.addEventListener('dblclick', e => {
+                if (e.target.closest('.ctrl-btn')) return;
+                collapsed = !collapsed;
+                this.root.style.height = collapsed ? '50px' : '';
+            });
+
             head.addEventListener('mousedown', e => {
                 if (e.target.closest('.ctrl-btn')) return;
-                
+
                 head.classList.add('dragging');
-                
+
                 const startX = e.clientX, startY = e.clientY;
                 const rect = this.root.getBoundingClientRect();
                 const initialLeft = rect.left, initialTop = rect.top;
-                
+
                 this.root.style.left = `${initialLeft}px`;
                 this.root.style.top = `${initialTop}px`;
                 this.root.style.right = 'auto';
                 e.preventDefault();
 
                 const onMouseMove = ev => {
-                    this.root.style.left = `${initialLeft + (ev.clientX - startX)}px`;
-                    this.root.style.top = `${initialTop + (ev.clientY - startY)}px`;
+                    this.root.style.left = `${Math.max(0, Math.min(initialLeft + (ev.clientX - startX), window.innerWidth - this.root.offsetWidth))}px`;
+                    this.root.style.top = `${Math.max(0, Math.min(initialTop + (ev.clientY - startY), window.innerHeight - 50))}px`;
                 };
 
                 const onMouseUp = () => {
@@ -413,10 +423,10 @@
                 const card = document.getElementById(`orion-task-${id}`);
                 if (card) {
                     const pct = this._getPct(newData);
-                    
+
                     const iconContainer = card.querySelector('.task-icon');
                     if (iconContainer) iconContainer.style.setProperty('--p', `${pct}%`);
-                    
+
                     const overlay = card.querySelector('.task-icon-overlay');
                     if (overlay) overlay.textContent = `${Math.floor(pct)}%`;
 
@@ -489,7 +499,7 @@
                 let statusText = t.status === 'CLAIMED' ? 'CLAIMED' : t.done ? 'COMPLETED' : t.status;
                 let progressLabel = t.pending ? 'In Queue' : t.failed ? 'Aborted' : 'Progress';
                 const unit = t.type === 'ACHIEVEMENT' ? '' : 's';
-                
+
                 let actionBtn = '';
 
                 if (t.claimable) {
@@ -608,37 +618,43 @@
 
                 body.innerHTML = `
                     <form id="orion-picker-form">
-                        ${rewardTypes.size > 1 ? `
-                            <div class="picker-section-title">Filter By Reward</div>
-                            <div class="reward-filters">
-                                ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="color: ${rt.color}; border-color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
+                        <div id="orion-options-panel" style="display:none;">
+                            ${rewardTypes.size > 1 ? `
+                                <div class="picker-section-title">Filter By Reward</div>
+                                <div class="reward-filters">
+                                    ${[...rewardTypes.values()].map(rt => `<button type="button" class="reward-filter" data-rt="${rt.type}" style="color: ${rt.color}; border-color: ${rt.color};">${rt.label} (${rt.count})</button>`).join('')}
+                                </div>
+                            ` : ''}
+                            ${questTypes.size > 1 ? `
+                                <div class="picker-section-title">Filter By Type</div>
+                                <div class="reward-filters">
+                                    ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}">${t}</button>`).join('')}
+                                </div>
+                            ` : ''}
+                            <div class="picker-section-title">Options</div>
+                            <div class="picker-options">
+                                ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
+                                ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
+                                ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
                             </div>
-                        ` : ''}
-                        ${questTypes.size > 1 ? `
-                            <div class="picker-section-title">Filter By Type</div>
-                            <div class="reward-filters">
-                                ${[...questTypes].map(t => `<button type="button" class="type-filter" data-qt="${t}">${t}</button>`).join('')}
-                            </div>
-                        ` : ''}
-                        
+                        </div>
+
                         <div id="orion-quest-list" class="picker-quest-list">${items.map(buildCard).join('')}
                             <div id="orion-no-quests" style="display: none; margin: auto; text-align: center; color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">
                                 No quests available
                             </div>
                         </div>
-                        
-                        <div class="picker-section-title">Options</div>
-                        <div class="picker-options">
-                            ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
-                            ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
-                            ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
-                        </div>
-                        
+
                         <div class="picker-actions">
                             <button type="button" class="quest-pick-btn deselect" id="select-all-btn">DESELECT ALL</button>
                             <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} <span id="start-btn-text">START (${items.length})</span></button>
                         </div>
                     </form>`;
+
+                document.getElementById('orion-opts').addEventListener('click', () => {
+                    const panel = document.getElementById('orion-options-panel');
+                    panel.style.display = panel.style.display === 'none' ? '' : 'none';
+                });
 
                 const form = document.getElementById('orion-picker-form');
                 const selectAllBtn = document.getElementById('select-all-btn');
@@ -713,7 +729,7 @@
 
                 form.addEventListener('submit', (e) => {
                     e.preventDefault();
-                    
+
                     const selected = getVisibleCheckboxes().filter(cb => cb.checked);
                     if (selected.length === 0) return;
 
@@ -1347,11 +1363,11 @@
 
                 const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
                 const missing = required.filter(k => !Mods[k]);
-                
+
                 if (missing.length === 0) {
                     const optional =['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
                     optional.forEach(k => { if (!Mods[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
-                    
+
                     Patcher.init(Mods.RunStore);
                     return true;
                 }
