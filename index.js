@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.7",
+        VERSION: "v4.8",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -30,7 +30,6 @@
         autoEnroll: true,               // whether to auto-enroll in quests before execution
         autoClaim: false,               // whether to try auto-claiming quest rewards
         playSound: false,               // whether to play an audio cue on quest completion
-        skipManual: false,              // whether to fail-fast skip ACHIEVEMENT quests instead of waiting passively
         randomDelay: false              // whether to inject randomized 1-30min idle gaps between quests (anti-detection)
     };
 
@@ -638,7 +637,6 @@
                                 ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
                                 ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
                                 ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
-                                ${buildToggle('skipManual', 'Skip manual activities', RUNTIME.skipManual)}
                                 ${buildToggle('randomDelay', 'Random 1-30min delay between cycles', RUNTIME.randomDelay)}
                             </div>
                         </div>
@@ -655,8 +653,12 @@
                         </div>
                     </form>`;
 
+                // gear-icon click toggles the options panel. the gear lives in the
+                // header (always mounted) but the panel only exists during the picker
+                // phase. guard against null so post-picker clicks don't throw.
                 document.getElementById('orion-opts').addEventListener('click', () => {
                     const panel = document.getElementById('orion-options-panel');
+                    if (!panel) return;
                     panel.style.display = panel.style.display === 'none' ? '' : 'none';
                 });
 
@@ -744,7 +746,6 @@
                         autoEnroll: data.has('autoEnroll'),
                         autoClaim: data.has('autoClaim'),
                         playSound: data.has('playSound'),
-                        skipManual: data.has('skipManual'),
                         randomDelay: data.has('randomDelay')
                     });
                 });
@@ -1028,8 +1029,8 @@
             }
 
             while (cur < t.target && RUNTIME.running) {
-                // simulate real client polling interval (7-9.5s)
-                const delayMs = rnd(7000, 9500);
+                // 2x faster than Discord's native 7-9.5s player cadence
+                const delayMs = rnd(3500, 4750);
                 await sleep(delayMs);
 
                 // calculate elapsed time with execution jitter
@@ -1145,9 +1146,97 @@
             });
         },
 
+        // OAuth2 → discordsays.com bypass for ACHIEVEMENT_IN_ACTIVITY.
+        // Discord trusts the activity backend to validate progress, so a forged
+        // POST from an authorized session is accepted. Flow:
+        //   1) /oauth2/authorize the quest's app (returns code in location URL)
+        //   2) /applications/{appId}/proxy-tickets (returns proxy ticket)
+        //   3) POST {appId}.discordsays.com/.proxy/acf/authorize {code} → DS token
+        //   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
+        //   5) /oauth2/tokens + DELETE to clean up the grant
+        async bypassAchievement(q, t) {
+            const appId = q.config?.application?.id;
+            if (!appId) return false;
+            try {
+                Logger.log(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`, 'info');
+
+                const authRes = await Mods.API.post({
+                    url: '/oauth2/authorize',
+                    query: {
+                        response_type: 'code',
+                        client_id: appId,
+                        scope: 'identify applications.commands applications.entitlements'
+                    },
+                    body: {
+                        permissions: '0',
+                        authorize: true,
+                        integration_type: 1,
+                        location_context: { guild_id: '10000', channel_id: '10000', channel_type: 10000 }
+                    }
+                });
+                const location = authRes?.body?.location;
+                if (!location) throw new Error('no location in /oauth2/authorize response');
+                const authCode = new URL(location).searchParams.get('code');
+                if (!authCode) throw new Error('no code in authorize location');
+
+                const ticketRes = await Mods.API.post({ url: `/applications/${appId}/proxy-tickets`, body: {} });
+                const proxyTicket = ticketRes?.body?.ticket;
+                if (!proxyTicket) throw new Error('no proxy ticket');
+
+                const referrer = `https://${appId}.discordsays.com/?instance_id=example-cl-instance&platform=desktop&discord_proxy_ticket=${encodeURIComponent(proxyTicket)}`;
+
+                const dsAuthRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/authorize`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Auth-Token': '', 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
+                    body: JSON.stringify({ code: authCode })
+                });
+                if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
+                const { token: dsToken } = await dsAuthRes.json();
+                if (!dsToken) throw new Error('no discordsays token');
+
+                const progRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/quest/progress`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Auth-Token': dsToken, 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
+                    body: JSON.stringify({ progress: t.target })
+                });
+                if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
+
+                Logger.log(`[Bypass] Success — "${t.name}" completed via Discord Says.`, 'success');
+
+                // cleanup: remove the OAuth2 grant we just created so the app isn't left authorized
+                try {
+                    const tokens = await Mods.API.get({ url: '/oauth2/tokens' });
+                    const grant = (tokens?.body || []).find(tk => tk.application?.id === appId);
+                    if (grant) await Mods.API.del({ url: `/oauth2/tokens/${grant.id}` });
+                } catch (e) {
+                    Logger.log(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`, 'debug');
+                }
+
+                return true;
+            } catch (e) {
+                // Discord's API client rejects with {status, body:{code,message}}, not Error — stringify properly
+                const code = e?.body?.code;
+                // 50165 = Cannot launch Age-Gated Activity — activity is age-gated or has been delisted
+                if (code === 50165) {
+                    Logger.log(`[Bypass] "${t.name}" can't be launched (age-gated or delisted). Discord blocks the proxy ticket — nothing we can do.`, 'warn');
+                    return false;
+                }
+                const parts = [];
+                if (e?.status) parts.push(`HTTP ${e.status}`);
+                if (code) parts.push(`code ${code}`);
+                if (e?.body?.message) parts.push(e.body.message);
+                else if (e?.message) parts.push(e.message);
+                else if (typeof e === 'string') parts.push(e);
+                else if (e) { try { parts.push(JSON.stringify(e).slice(0, 200)); } catch { parts.push(String(e)); } }
+                Logger.log(`[Bypass] Failed: ${parts.join(' — ') || 'unknown'}`, 'warn');
+                return false;
+            }
+        },
+
         // ACHIEVEMENT_IN_ACTIVITY — target is usually 1 (a milestone, not seconds).
-        // First tries active heartbeat spoofing (same as ACTIVITY handler).
-        // If Discord rejects with 4xx, falls back to passive event monitoring.
+        // 1) heartbeat spoof (works for some quests)
+        // 2) discordsays OAuth bypass (silver bullet)
+        // 3) skip on failure — no more 25-min passive wait
         async ACHIEVEMENT(q, t) {
             Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING" });
 
@@ -1194,50 +1283,15 @@
                 if (cur >= t.target && RUNTIME.running) return Tasks.finish(q, t);
             }
 
-            // fallback: passive mode — wait for user to complete the activity manually
+            // heartbeat path failed or skipped — try the Discord Says auth bypass
             if (!RUNTIME.running) return;
-            if (RUNTIME.skipManual) {
-                Logger.log(`[Task] Skipping "${t.name}" — manual activity quest and skip-manual is enabled.`, 'warn');
-                return Tasks.failTask(q, t, 'Manual activity skipped per user setting');
-            }
-            Logger.log(`[Task] Action required: Join Activity to earn "${t.name}"`, 'warn');
-            Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING", actionRequired: true });
+            const bypassed = await Tasks.bypassAchievement(q, t);
+            if (bypassed) return Tasks.finish(q, t);
 
-            return new Promise(resolve => {
-                let cleaned = false;
-                let safetyTimer;
-
-                const finish = () => {
-                    if (cleaned) return;
-                    cleaned = true;
-                    clearTimeout(safetyTimer);
-                    try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) { }
-                    RUNTIME.cleanups.delete(finish);
-                };
-
-                safetyTimer = setTimeout(() => {
-                    if (RUNTIME.running) Tasks.failTask(q, t, 'Timeout - achievement not earned');
-                    finish();
-                    resolve();
-                }, SYS.MAX_TIME);
-
-                const check = (d) => {
-                    if (!RUNTIME.running) { finish(); resolve(); return; }
-                    if (d?.questId !== q.id) return;
-
-                    const prog = d.userStatus?.progress?.ACHIEVEMENT_IN_ACTIVITY?.value ?? 0;
-                    Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: prog, max: t.target, status: "RUNNING" });
-
-                    if (prog >= t.target) {
-                        finish();
-                        Tasks.finish(q, t);
-                        resolve();
-                    }
-                };
-
-                Mods.Dispatcher?.subscribe(CONST.EVT.HEARTBEAT, check);
-                RUNTIME.cleanups.add(finish);
-            });
+            // both auto-paths failed: skip the quest. no more 25-min passive wait.
+            if (!RUNTIME.running) return;
+            Logger.log(`[Task] Skipping "${t.name}" — no auto-completion path worked (heartbeat rejected, bypass blocked). Likely age-gated/delisted on your account.`, 'warn');
+            return Tasks.failTask(q, t, 'Cannot auto-complete');
         },
 
         // heartbeat loop against a voice channel to simulate activity participation
@@ -1560,7 +1614,6 @@
         RUNTIME.autoEnroll = pickerResult.autoEnroll;
         RUNTIME.autoClaim = pickerResult.autoClaim;
         RUNTIME.playSound = pickerResult.playSound;
-        RUNTIME.skipManual = pickerResult.skipManual;
         RUNTIME.randomDelay = pickerResult.randomDelay;
 
         if (pickerResult.selectedQuests.size === 0) {
@@ -1676,7 +1729,7 @@
                 if (totalTasks > 0) {
                     Logger.log(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
                     const pGames = runConcurrent(queues.game, 1);
-                    const pVideos = runConcurrent(queues.video, 1);
+                    const pVideos = runConcurrent(queues.video, 2);
                     await Promise.all([pGames, pVideos]);
                 } else {
                     if (active.length === 0) { Logger.log('[System] All available quests are completed!', 'success'); break; }
