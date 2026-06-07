@@ -10,7 +10,7 @@ A [Vencord](https://vencord.dev) userplugin port of [Orion](../README.md), the a
 
 ## Status
 
-**Functional.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
+**Functional, in sync with userscript v4.8.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT` with discordsays OAuth bypass), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
 
 The remaining gap from the userscript is the floating dashboard panel — progress is currently surfaced via Discord's native console + `/orion status` rather than a custom DOM overlay. That fits the Vencord usage model better, but if you want the panel back, see the open enhancement tracker.
 
@@ -116,7 +116,7 @@ You *can* paste the userscript into Discord's DevTools console even if you're ru
 
 Same as the userscript:
 
-- **ACHIEVEMENT_IN_ACTIVITY** quests are server-validated. Heartbeat spoofing is attempted; on rejection, falls back to passive monitoring (you have to actually play the activity).
+- **ACHIEVEMENT_IN_ACTIVITY** quests now auto-complete via the discordsays OAuth bypass when heartbeat spoofing is rejected (v4.8+). Falls back to skip only for age-gated or delisted activities (HTTP 403 code 50165 from `/proxy-tickets`) — those can't be launched even manually.
 - **Browsers / mobile** never supported.
 - **PLAY_ON_DESKTOP** progress is real wall-clock elapsed time on Discord's server. Cannot be accelerated.
 

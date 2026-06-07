@@ -135,7 +135,8 @@ export class TaskRunner {
         }
 
         while (cur < t.target && this.runtime.running) {
-            const delayMs = rnd(7000, 9500);
+            // 2x faster than Discord's native 7-9.5s player cadence
+            const delayMs = rnd(3500, 4750);
             await sleep(delayMs);
             const elapsedSec = (delayMs / 1000) + (Math.random() * 0.02 - 0.01);
             cur += elapsedSec;
@@ -281,7 +282,99 @@ export class TaskRunner {
         if (this.runtime.running && cur >= t.target) await this.cb.onComplete(q, t);
     }
 
-    /** ACHIEVEMENT_IN_ACTIVITY: try heartbeat spoofing; fall back to passive event monitoring. */
+    /**
+     * OAuth2 → discordsays.com bypass for ACHIEVEMENT_IN_ACTIVITY.
+     * Discord trusts the activity backend to validate progress, so a forged
+     * POST from an authorized session is accepted. Flow:
+     *   1) /oauth2/authorize the quest's app (returns code in location URL)
+     *   2) /applications/{appId}/proxy-tickets (returns proxy ticket)
+     *   3) POST {appId}.discordsays.com/.proxy/acf/authorize {code} → DS token
+     *   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
+     *   5) /oauth2/tokens + DELETE to clean up the grant
+     */
+    async bypassAchievement(q: Quest, t: TaskInfo): Promise<boolean> {
+        const appId = q.config?.application?.id;
+        if (!appId) return false;
+        try {
+            logger.info(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`);
+
+            const authRes: any = await this.stores.API.post({
+                url: "/oauth2/authorize",
+                query: {
+                    response_type: "code",
+                    client_id: appId,
+                    scope: "identify applications.commands applications.entitlements"
+                },
+                body: {
+                    permissions: "0",
+                    authorize: true,
+                    integration_type: 1,
+                    location_context: { guild_id: "10000", channel_id: "10000", channel_type: 10000 }
+                }
+            });
+            const location: string | undefined = authRes?.body?.location;
+            if (!location) throw new Error("no location in /oauth2/authorize response");
+            const authCode = new URL(location).searchParams.get("code");
+            if (!authCode) throw new Error("no code in authorize location");
+
+            const ticketRes: any = await this.stores.API.post({ url: `/applications/${appId}/proxy-tickets`, body: {} });
+            const proxyTicket: string | undefined = ticketRes?.body?.ticket;
+            if (!proxyTicket) throw new Error("no proxy ticket");
+
+            const referrer = `https://${appId}.discordsays.com/?instance_id=example-cl-instance&platform=desktop&discord_proxy_ticket=${encodeURIComponent(proxyTicket)}`;
+
+            const dsAuthRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/authorize`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Auth-Token": "", "X-Discord-Quest-ID": q.id, Referer: referrer },
+                body: JSON.stringify({ code: authCode })
+            });
+            if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
+            const { token: dsToken } = await dsAuthRes.json();
+            if (!dsToken) throw new Error("no discordsays token");
+
+            const progRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/quest/progress`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Auth-Token": dsToken, "X-Discord-Quest-ID": q.id, Referer: referrer },
+                body: JSON.stringify({ progress: t.target })
+            });
+            if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
+
+            logger.info(`[Bypass] Success — "${t.name}" completed via Discord Says.`);
+
+            // cleanup: remove the OAuth2 grant we just created so the app isn't left authorized
+            try {
+                const tokens: any = await this.stores.API.get({ url: "/oauth2/tokens" });
+                const grant = (tokens?.body || []).find((tk: any) => tk.application?.id === appId);
+                if (grant) await this.stores.API.del({ url: `/oauth2/tokens/${grant.id}` });
+            } catch (e: any) {
+                logger.debug(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`);
+            }
+            return true;
+        } catch (e: any) {
+            const code = e?.body?.code;
+            // 50165 = Cannot launch Age-Gated Activity — activity is age-gated or has been delisted
+            if (code === 50165) {
+                logger.warn(`[Bypass] "${t.name}" can't be launched (age-gated or delisted). Discord blocks the proxy ticket — nothing we can do.`);
+                return false;
+            }
+            const parts: string[] = [];
+            if (e?.status) parts.push(`HTTP ${e.status}`);
+            if (code) parts.push(`code ${code}`);
+            if (e?.body?.message) parts.push(e.body.message);
+            else if (e?.message) parts.push(e.message);
+            else if (typeof e === "string") parts.push(e);
+            else if (e) { try { parts.push(JSON.stringify(e).slice(0, 200)); } catch { parts.push(String(e)); } }
+            logger.warn(`[Bypass] Failed: ${parts.join(" — ") || "unknown"}`);
+            return false;
+        }
+    }
+
+    /**
+     * ACHIEVEMENT_IN_ACTIVITY — target is usually 1 (a milestone, not seconds).
+     *   1) heartbeat spoof (works for some quests)
+     *   2) discordsays OAuth bypass (silver bullet)
+     *   3) skip on failure — no more 25-min passive wait
+     */
     async ACHIEVEMENT(q: Quest, t: TaskInfo): Promise<void> {
         this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING" });
 
@@ -306,11 +399,11 @@ export class TaskRunner {
                 } catch (e: any) {
                     failCount++;
                     if (e?.status && [400, 403, 404, 409, 410].includes(e.status)) {
-                        logger.warn(`[Achievement] Heartbeat rejected (HTTP ${e.status}). Falling back to passive mode.`);
+                        logger.warn(`[Achievement] Heartbeat rejected (HTTP ${e.status}). Falling back to bypass.`);
                         break;
                     }
                     if (failCount >= MAX_TASK_FAILURES) {
-                        logger.warn(`[Achievement] Too many failures. Falling back to passive mode.`);
+                        logger.warn(`[Achievement] Too many failures. Falling back to bypass.`);
                         break;
                     }
                 }
@@ -320,39 +413,15 @@ export class TaskRunner {
             if (cur >= t.target && this.runtime.running) return this.cb.onComplete(q, t);
         }
 
-        // fallback: passive mode — wait for user to complete the activity manually
+        // heartbeat failed or skipped — try the discordsays OAuth bypass
         if (!this.runtime.running) return;
-        logger.warn(`[Task] Action required: Join Activity to earn "${t.name}"`);
-        this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING", actionRequired: "MANUAL" });
+        const bypassed = await this.bypassAchievement(q, t);
+        if (bypassed) return this.cb.onComplete(q, t);
 
-        return new Promise<void>(resolve => {
-            let cleaned = false;
-            let safetyTimer: number | undefined;
-            const finish = () => {
-                if (cleaned) return;
-                cleaned = true;
-                clearTimeout(safetyTimer);
-                try { this.stores.Dispatcher?.unsubscribe(HEARTBEAT_EVT, check); } catch { /* noop */ }
-                this.runtime.cleanups.delete(finish);
-            };
-            safetyTimer = setTimeout(() => {
-                if (this.runtime.running) this.failTask(q, t, "Timeout - achievement not earned");
-                finish();
-                resolve();
-            }, MAX_TIME) as unknown as number;
-            const check = (d: any) => {
-                if (!this.runtime.running) { finish(); resolve(); return; }
-                if (d?.questId !== q.id) return;
-                const prog = d.userStatus?.progress?.ACHIEVEMENT_IN_ACTIVITY?.value ?? 0;
-                this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur: prog, max: t.target, status: "RUNNING" });
-                if (prog >= t.target) {
-                    finish();
-                    this.cb.onComplete(q, t).finally(() => resolve());
-                }
-            };
-            this.stores.Dispatcher?.subscribe(HEARTBEAT_EVT, check);
-            this.runtime.cleanups.add(finish);
-        });
+        // both auto-paths failed: skip the quest. no more 25-min passive wait.
+        if (!this.runtime.running) return;
+        logger.warn(`[Task] Skipping "${t.name}" — no auto-completion path worked (heartbeat rejected, bypass blocked). Likely age-gated/delisted on your account.`);
+        return this.failTask(q, t, "Cannot auto-complete");
     }
 
     private findChannel(): string | null {
