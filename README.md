@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.6.3
+**Auto-complete every Discord Quest in seconds** &mdash; v4.7
 
-[![Version](https://img.shields.io/badge/v4.6.3-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.7-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -196,6 +196,12 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.7
+- **Collapse-on-double-click + drag boundaries** &mdash; Double-click the header to minimize the panel to a 50px stub; double-click again to expand. The dashboard can no longer be dragged outside the viewport on either axis. Picker options panel hidden behind a new gear icon (`⚙️`) for a cleaner first-paint. Thanks to @TirOFlanc in [#32](https://github.com/nyxxbit/discord-quest-completer/pull/32).
+- **Skip manual activities** &mdash; New picker toggle. When ACHIEVEMENT_IN_ACTIVITY quests fall back to passive mode (waiting for you to actually play the activity), the script now optionally fail-fast skips them so the queue keeps moving instead of blocking a slot for 25 minutes. Default off. Resolves [#33](https://github.com/nyxxbit/discord-quest-completer/issues/33).
+- **Random 1-30min delay between cycles** &mdash; New picker toggle. Injects a randomized idle gap between quest cycles for anti-detection during long AFK runs. Default off (preserves current behavior). Implements the request in [#30](https://github.com/nyxxbit/discord-quest-completer/issues/30).
+- **Dashboard persists when rewards are unclaimed** &mdash; The widget no longer auto-shuts down the moment the last quest completes if any task still has a CLAIM button waiting. Click STOP manually after claiming. Resolves [#31](https://github.com/nyxxbit/discord-quest-completer/issues/31).
 
 ### v4.6.3
 - **Fix CSP violation in credit text** &mdash; The header's `by syntt_` was an `<a>` with inline `onmouseover` / `onmouseout` handlers. Discord enforces strict CSP and rejected the inline handlers with a console error; the link itself also redirected to `/@me` (Discord's URL scheme does not open user profiles via `discord.com/users/<id>`). Replaced with a plain `<span class="dev-credit">` and moved styling into the stylesheet. Resolves [#29](https://github.com/nyxxbit/discord-quest-completer/issues/29).

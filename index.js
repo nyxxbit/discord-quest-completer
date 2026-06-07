@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.6.3",
+        VERSION: "v4.7",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -29,7 +29,9 @@
         cleanups: new Set(),            // tracks active event listeners for safe shutdown
         autoEnroll: true,               // whether to auto-enroll in quests before execution
         autoClaim: false,               // whether to try auto-claiming quest rewards
-        playSound: false                // whether to play an audio cue on quest completion
+        playSound: false,               // whether to play an audio cue on quest completion
+        skipManual: false,              // whether to fail-fast skip ACHIEVEMENT quests instead of waiting passively
+        randomDelay: false              // whether to inject randomized 1-30min idle gaps between quests (anti-detection)
     };
 
     /* ── audio cue ───────────────────────────────────────────────── */
@@ -636,6 +638,8 @@
                                 ${buildToggle('autoEnroll', 'Auto-enroll in quests', RUNTIME.autoEnroll)}
                                 ${buildToggle('autoClaim', 'Auto-claim rewards', RUNTIME.autoClaim)}
                                 ${buildToggle('playSound', 'Sound on completion', RUNTIME.playSound)}
+                                ${buildToggle('skipManual', 'Skip manual activities', RUNTIME.skipManual)}
+                                ${buildToggle('randomDelay', 'Random 1-30min delay between cycles', RUNTIME.randomDelay)}
                             </div>
                         </div>
 
@@ -739,7 +743,9 @@
                         selectedQuests: new Set(selected.map(cb => cb.value)),
                         autoEnroll: data.has('autoEnroll'),
                         autoClaim: data.has('autoClaim'),
-                        playSound: data.has('playSound')
+                        playSound: data.has('playSound'),
+                        skipManual: data.has('skipManual'),
+                        randomDelay: data.has('randomDelay')
                     });
                 });
 
@@ -1190,6 +1196,10 @@
 
             // fallback: passive mode — wait for user to complete the activity manually
             if (!RUNTIME.running) return;
+            if (RUNTIME.skipManual) {
+                Logger.log(`[Task] Skipping "${t.name}" — manual activity quest and skip-manual is enabled.`, 'warn');
+                return Tasks.failTask(q, t, 'Manual activity skipped per user setting');
+            }
             Logger.log(`[Task] Action required: Join Activity to earn "${t.name}"`, 'warn');
             Logger.updateTask(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING", actionRequired: true });
 
@@ -1550,6 +1560,8 @@
         RUNTIME.autoEnroll = pickerResult.autoEnroll;
         RUNTIME.autoClaim = pickerResult.autoClaim;
         RUNTIME.playSound = pickerResult.playSound;
+        RUNTIME.skipManual = pickerResult.skipManual;
+        RUNTIME.randomDelay = pickerResult.randomDelay;
 
         if (pickerResult.selectedQuests.size === 0) {
             Logger.log('[System] No quests selected. Shutting down.', 'info');
@@ -1672,8 +1684,17 @@
                 }
 
                 if (!RUNTIME.running) break;
-                Logger.log(`[Cycle] Loop #${loopCount} complete. Waiting before rescan...`, 'info');
-                await sleep(rnd(2500, 4500));
+
+                // anti-detection: opt-in randomized idle gap between cycles. each cycle
+                // typically completes 1+ quests, so this throttles overall quest velocity.
+                if (RUNTIME.randomDelay) {
+                    const delayMs = rnd(60000, 1800000); // 1-30 minutes
+                    Logger.log(`[Cycle] Loop #${loopCount} complete. Random delay: ${Math.round(delayMs / 60000)}m before rescan.`, 'info');
+                    await sleep(delayMs);
+                } else {
+                    Logger.log(`[Cycle] Loop #${loopCount} complete. Waiting before rescan...`, 'info');
+                    await sleep(rnd(2500, 4500));
+                }
                 loopCount++;
 
             } catch (cycleError) {
@@ -1682,6 +1703,15 @@
                 await sleep(3000);
                 loopCount++;
             }
+        }
+
+        // Keep the UI alive if there are unclaimed rewards waiting — losing the
+        // dashboard the moment the queue finishes means users miss the CLAIM
+        // buttons (especially when auto-claim is off). User can click STOP manually.
+        const hasUnclaimed = [...Logger.tasks.values()].some(t => t.claimable && !t.removing);
+        if (hasUnclaimed) {
+            Logger.log('[System] Quest cycle finished. Claim your rewards above, then click STOP.', 'info');
+            return; // skip shutdown; the STOP button still works
         }
 
         Logger.shutdown();
