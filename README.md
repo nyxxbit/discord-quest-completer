@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.8
+**Auto-complete every Discord Quest in seconds** &mdash; v4.8.1
 
-[![Version](https://img.shields.io/badge/v4.8-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.8.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -86,7 +86,7 @@ QuestStore → filter incomplete → JIT enroll → dispatch tasks → poll prog
 | **Game** | Injects a spoofed process into `RunStore` with real metadata from Discord's app registry |
 | **Stream** | Patches `StreamStore.getStreamerActiveStreamMetadata` with synthetic stream data |
 | **Activity** | Heartbeats against a voice channel to simulate participation |
-| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. Skips when both paths fail (age-gated/delisted activities) |
+| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. **The final discordsays.com POST is blocked by Discord's renderer CSP in the userscript &mdash; works only via the [Vencord plugin port](vencord-plugin/) which routes through a main-process fetch.** Skips when both paths fail |
 
 ---
 
@@ -197,8 +197,11 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 
 ## Changelog
 
+### v4.8.1
+- **Honest CSP error message + Vencord native bypass** &mdash; Testing v4.8 surfaced that Discord's renderer CSP (`connect-src` allowlist) blocks the final `fetch()` to `*.discordsays.com` from the userscript. Steps 1-2 of the bypass (OAuth2 authorize + proxy-ticket mint) work; step 3 (POST to the activity backend) does not. The userscript now detects the CSP failure and prints a clear message pointing to the Vencord plugin instead of "Failed to fetch". The [Vencord plugin port](vencord-plugin/) gained a native module (`native.ts`) that runs the discordsays POSTs in the Electron main process where CSP doesn't apply &mdash; the auto-bypass actually completes there.
+
 ### v4.8
-- **ACHIEVEMENT_IN_ACTIVITY auto-bypass** &mdash; New OAuth2 → discordsays.com handshake. When Discord's heartbeat endpoint rejects (HTTP 403, which it does for most current Achievement quests), Orion now authorizes against the activity's own backend, mints a proxy ticket, and POSTs the target progress directly. No more 25-minute passive wait, no more "join the activity manually". The previous picker toggle to skip these is now mandatory behavior &mdash; if both paths fail (typically age-gated or delisted activities like *The Odyssey*), the quest is skipped cleanly instead of blocking a queue slot.
+- **ACHIEVEMENT_IN_ACTIVITY auto-bypass** &mdash; New OAuth2 → discordsays.com handshake. When Discord's heartbeat endpoint rejects (HTTP 403, which it does for most current Achievement quests), Orion now authorizes against the activity's own backend, mints a proxy ticket, and POSTs the target progress directly. No more 25-minute passive wait, no more "join the activity manually". The previous picker toggle to skip these is now mandatory behavior &mdash; if both paths fail (typically age-gated or delisted activities like *The Odyssey*), the quest is skipped cleanly instead of blocking a queue slot. **Note: the discordsays.com POSTs are blocked by Discord's renderer CSP &mdash; the userscript can only complete the OAuth handshake locally. See [v4.8.1](#v481) for the workaround.**
 - **2x faster video polling** &mdash; Video heartbeats now run at 3.5-4.75s instead of 7-9.5s. Cuts each video quest's wall-clock in half. Discord's server-side validation accepts the faster cadence.
 - **Two parallel video quests** &mdash; Video concurrency raised from 1 to 2. Two video quests complete simultaneously instead of serially.
 - **Fix `TypeError: Cannot read properties of null` on gear-icon click** &mdash; The options gear stays mounted in the header after the picker closes, but its panel doesn't. Added a null guard so post-picker clicks no longer throw.

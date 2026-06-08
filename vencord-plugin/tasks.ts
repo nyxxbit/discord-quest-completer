@@ -11,6 +11,7 @@
  */
 
 import { Logger } from "@utils/Logger";
+import type { PluginNative } from "@utils/types";
 
 import type { Patcher } from "./patcher";
 import type { Traffic } from "./traffic";
@@ -19,6 +20,11 @@ import type { DetectedTask, FakeGame, OrionRuntime, Quest, Stores, TaskInfo, Tas
 import { rnd, sanitize, sleep } from "./util";
 
 const logger = new Logger("OrionQuests");
+
+// Discord renderer CSP blocks connect-src to *.discordsays.com. The bypass
+// routes the discordsays POSTs through Vencord's main process via IPC, where
+// Node fetch runs without CSP restrictions.
+const Native = VencordNative.pluginHelpers.OrionQuests as PluginNative<typeof import("./native")>;
 
 const HEARTBEAT_EVT = "QUESTS_SEND_HEARTBEAT_SUCCESS";
 const MAX_TIME = 25 * 60 * 1000; // 25 minutes per task
@@ -323,20 +329,13 @@ export class TaskRunner {
 
             const referrer = `https://${appId}.discordsays.com/?instance_id=example-cl-instance&platform=desktop&discord_proxy_ticket=${encodeURIComponent(proxyTicket)}`;
 
-            const dsAuthRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/authorize`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "X-Auth-Token": "", "X-Discord-Quest-ID": q.id, Referer: referrer },
-                body: JSON.stringify({ code: authCode })
-            });
+            // CSP-exempt main-process fetch via the native module
+            const dsAuthRes = await Native.discordsaysAuthorize({ appId, questId: q.id, authCode, referrer });
             if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
-            const { token: dsToken } = await dsAuthRes.json();
+            const { token: dsToken } = JSON.parse(dsAuthRes.body) as { token?: string };
             if (!dsToken) throw new Error("no discordsays token");
 
-            const progRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/quest/progress`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "X-Auth-Token": dsToken, "X-Discord-Quest-ID": q.id, Referer: referrer },
-                body: JSON.stringify({ progress: t.target })
-            });
+            const progRes = await Native.discordsaysProgress({ appId, questId: q.id, token: dsToken, target: t.target, referrer });
             if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
 
             logger.info(`[Bypass] Success — "${t.name}" completed via Discord Says.`);

@@ -10,7 +10,9 @@ A [Vencord](https://vencord.dev) userplugin port of [Orion](../README.md), the a
 
 ## Status
 
-**Functional, in sync with userscript v4.8.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT` with discordsays OAuth bypass), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
+**Functional, in sync with userscript v4.8.1.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
+
+**The ACHIEVEMENT bypass actually works here.** The userscript port can run the OAuth2 authorize flow but Discord's renderer CSP blocks the final POST to `*.discordsays.com`. This plugin includes a native module (`native.ts`) that runs those POSTs in the Electron main process, where CSP doesn't apply &mdash; so the auto-bypass actually completes the quest without you having to launch the activity.
 
 The remaining gap from the userscript is the floating dashboard panel — progress is currently surfaced via Discord's native console + `/orion status` rather than a custom DOM overlay. That fits the Vencord usage model better, but if you want the panel back, see the open enhancement tracker.
 
@@ -91,6 +93,7 @@ vencord-plugin/
 ├── orion.ts      # store loading, main cycle loop, dashboard registry
 ├── traffic.ts    # FIFO request queue with exponential backoff
 ├── tasks.ts      # per-type handlers (VIDEO / GAME / STREAM / ACTIVITY / ACHIEVEMENT)
+├── native.ts     # main-process IPC handlers — CSP-exempt discordsays POSTs
 ├── patcher.ts    # RunningGameStore monkey-patch + RPC dispatch
 ├── types.ts      # shared TypeScript interfaces
 └── util.ts       # sleep / rnd / sanitize helpers
@@ -116,7 +119,7 @@ You *can* paste the userscript into Discord's DevTools console even if you're ru
 
 Same as the userscript:
 
-- **ACHIEVEMENT_IN_ACTIVITY** quests now auto-complete via the discordsays OAuth bypass when heartbeat spoofing is rejected (v4.8+). Falls back to skip only for age-gated or delisted activities (HTTP 403 code 50165 from `/proxy-tickets`) — those can't be launched even manually.
+- **ACHIEVEMENT_IN_ACTIVITY** quests now auto-complete via the discordsays OAuth bypass when heartbeat spoofing is rejected (v4.8+). The discordsays POSTs are made through the native module to bypass renderer CSP. Falls back to skip only for age-gated or delisted activities (HTTP 403 code 50165 from `/proxy-tickets`) — those can't be launched even manually. **If you haven't age-verified for the activity in Discord's settings, the proxy-ticket endpoint will return 50165 even on auto-bypass; verify your age first.**
 - **Browsers / mobile** never supported.
 - **PLAY_ON_DESKTOP** progress is real wall-clock elapsed time on Discord's server. Cannot be accelerated.
 

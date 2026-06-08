@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.8",
+        VERSION: "v4.8.1",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1154,6 +1154,12 @@
         //   3) POST {appId}.discordsays.com/.proxy/acf/authorize {code} → DS token
         //   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
         //   5) /oauth2/tokens + DELETE to clean up the grant
+        //
+        // NOTE: Steps 3-4 are blocked by Discord's renderer CSP (connect-src
+        // doesn't include *.discordsays.com). This works on the Vencord port
+        // (main-process fetch) but the standalone userscript will fail at step 3.
+        // We attempt it anyway because some users run on web/modified clients
+        // where CSP is relaxed.
         async bypassAchievement(q, t) {
             const appId = q.config?.application?.id;
             if (!appId) return false;
@@ -1214,6 +1220,13 @@
 
                 return true;
             } catch (e) {
+                // Discord renderer CSP blocks connect-src to *.discordsays.com. fetch() throws
+                // TypeError "Failed to fetch" without a status. There's no userscript workaround
+                // — the bypass needs a main-process HTTP client (Vencord plugin native module).
+                if (e instanceof TypeError && /failed to fetch|networkerror/i.test(e.message)) {
+                    Logger.log(`[Bypass] Discord's CSP blocks the script from reaching discordsays.com. Use the Vencord plugin port for the auto-bypass — userscript can't bypass CSP. Skipping "${t.name}".`, 'warn');
+                    return false;
+                }
                 // Discord's API client rejects with {status, body:{code,message}}, not Error — stringify properly
                 const code = e?.body?.code;
                 // 50165 = Cannot launch Age-Gated Activity — activity is age-gated or has been delisted
