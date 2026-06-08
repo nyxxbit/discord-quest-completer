@@ -73,6 +73,7 @@ while ($listener.IsListening) {
 
     # Proxy endpoint — POST {url, headers, body} → forward to discordsays
     if ($method -eq 'POST' -and $path -eq '/proxy') {
+        $responded = $false
         try {
             $reader = New-Object System.IO.StreamReader($req.InputStream, $req.ContentEncoding)
             $raw = $reader.ReadToEnd()
@@ -136,15 +137,21 @@ while ($listener.IsListening) {
 
             $ok = $statusCode -ge 200 -and $statusCode -lt 300
             $result = @{ ok = $ok; status = $statusCode; body = $resBody } | ConvertTo-Json -Compress
-            Write-Response $ctx 200 $result
 
-            $host = $upstreamUri.Host
-            Write-Host "[$(Get-Date -Format HH:mm:ss)] POST $($upstreamUri.PathAndQuery) -> $statusCode ($host)"
+            # Log BEFORE responding so a logging error can't trigger a double-Write-Response
+            # in the catch block below. Use $upstreamHost (not $host — $host is a PS automatic variable).
+            $upstreamHost = $upstreamUri.Host
+            Write-Host "[$(Get-Date -Format HH:mm:ss)] POST $($upstreamUri.PathAndQuery) -> $statusCode ($upstreamHost)"
+
+            Write-Response $ctx 200 $result
+            $responded = $true
         } catch {
             $err = $_.Exception.Message -replace '"', "'"
-            $errJson = "{`"ok`":false,`"status`":0,`"body`":`"relay error: $err`"}"
-            Write-Response $ctx 500 $errJson
             Write-Host "[$(Get-Date -Format HH:mm:ss)] relay error: $err" -ForegroundColor Red
+            if (-not $responded) {
+                $errJson = "{`"ok`":false,`"status`":0,`"body`":`"relay error: $err`"}"
+                try { Write-Response $ctx 500 $errJson } catch { }
+            }
         }
         continue
     }
