@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.8.2",
+        VERSION: "v4.9",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1161,10 +1161,45 @@
         // DiscordNative if it exposes anything, else direct fetch.
         // POST to a CSP-restricted URL via the best available transport.
         // Returns { ok, status, body } on success, throws { status, body } on HTTP error
-        // and TypeError on CSP/network. Probes in order: VencordNative plugin (CSP-free
-        // via IPC to main process), DiscordNative HTTP candidates (if any exist), raw fetch.
+        // and TypeError on CSP/network. Probes in order: localhost relay (no mod needed
+        // — see tools/orion-relay/), VencordNative plugin (CSP-free via IPC to main
+        // process), DiscordNative HTTP candidates (if any exist), raw fetch.
+        _relayChecked: false,
+        _relayUrl: 'http://127.0.0.1:43210',
+
+        async _probeRelay() {
+            if (this._relayChecked) return this._relayAvailable;
+            this._relayChecked = true;
+            try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), 800);
+                const r = await fetch(`${this._relayUrl}/health`, { method: 'GET', signal: ctrl.signal });
+                clearTimeout(timer);
+                this._relayAvailable = r.ok;
+                if (r.ok) Logger.log('[Bypass] Orion Relay detected on 127.0.0.1:43210.', 'info');
+            } catch (_) {
+                this._relayAvailable = false;
+            }
+            return this._relayAvailable;
+        },
+
         async _bypassPost(url, headers, jsonBody) {
-            // 1) Vencord plugin native module — works if user has OrionQuests Vencord plugin
+            // 1) Localhost relay (tools/orion-relay/) — CSP allows http://127.0.0.1:*,
+            //    the relay forwards to discordsays.com from outside the browser sandbox.
+            //    This is the no-mod path: standalone userscript + tiny helper.
+            if (await this._probeRelay()) {
+                const r = await fetch(`${this._relayUrl}/proxy`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, headers, body: jsonBody })
+                });
+                if (!r.ok) throw { status: r.status, body: await r.text() };
+                const result = await r.json();
+                if (!result.ok) throw { status: result.status, body: result.body };
+                return result;
+            }
+
+            // 2) Vencord plugin native module — works if user has OrionQuests Vencord plugin
             //    installed (`vencord-plugin/native.ts`). Routes through Electron main process.
             try {
                 const helper = window.VencordNative?.pluginHelpers?.OrionQuests;
@@ -1192,7 +1227,7 @@
                 Logger.log(`[Bypass] VencordNative path errored: ${e?.message ?? e}`, 'debug');
             }
 
-            // 2) DiscordNative HTTP probe. Best-effort — no documented method exists,
+            // 3) DiscordNative HTTP probe. Best-effort — no documented method exists,
             //    but new Discord builds occasionally expose one. We probe several
             //    plausible paths and use the first that's a callable function.
             const dn = window.DiscordNative;
@@ -1217,7 +1252,7 @@
                 }
             }
 
-            // 3) Direct fetch — works on web Discord (no CSP) or relaxed clients.
+            // 4) Direct fetch — works on web Discord (no CSP) or relaxed clients.
             //    CSP-blocked on Discord Desktop: throws TypeError "Failed to fetch".
             const res = await fetch(url, { method: 'POST', headers, body: jsonBody });
             const body = await res.text();

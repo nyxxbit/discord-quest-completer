@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.8.2
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9
 
-[![Version](https://img.shields.io/badge/v4.8.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -86,7 +86,7 @@ QuestStore → filter incomplete → JIT enroll → dispatch tasks → poll prog
 | **Game** | Injects a spoofed process into `RunStore` with real metadata from Discord's app registry |
 | **Stream** | Patches `StreamStore.getStreamerActiveStreamMetadata` with synthetic stream data |
 | **Activity** | Heartbeats against a voice channel to simulate participation |
-| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. The discordsays POSTs auto-route through the [Vencord plugin port](vencord-plugin/) when installed (confirmed working), or fall back to direct `fetch` for web Discord. On stock Discord Desktop the renderer CSP blocks the final POST &mdash; install the Vencord plugin alongside the userscript to unlock it. Skips cleanly on age-gated/delisted activities |
+| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. The discordsays POSTs auto-route through the best available transport: [Orion Relay](tools/orion-relay/) (zero client mods needed), [Vencord plugin](vencord-plugin/) if installed, or direct `fetch` on web Discord. Skips cleanly on age-gated/delisted activities |
 
 ---
 
@@ -196,6 +196,10 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9
+- **`ACHIEVEMENT_IN_ACTIVITY` auto-bypass works on stock Discord Desktop** &mdash; no Vencord, no BetterDiscord, no client mod. The trick is a tiny localhost HTTP relay ([`tools/orion-relay/`](tools/orion-relay/)) that the userscript probes on boot. Discord's CSP allows `connect-src http://127.0.0.1:*` (for RPC with games); the relay forwards POSTs to `*.discordsays.com` from outside the browser sandbox. One PowerShell script + one `.cmd` launcher, ~100 lines total. Download from the release page, double-click to start, leave the window open, paste the userscript. Done.
+- **Transport picker priority** &mdash; `_bypassPost` now tries (1) Orion Relay on `127.0.0.1:43210`, (2) Vencord plugin via `VencordNative.pluginHelpers.OrionQuests`, (3) `DiscordNative` HTTP probes (best-effort for future Discord builds), (4) direct `fetch` (web Discord). First hit wins.
 
 ### v4.8.2
 - **Userscript hands off discordsays POSTs to the Vencord plugin when installed** &mdash; New `_bypassPost` transport picker. On Discord Desktop with Vencord + OrionQuests plugin installed, the userscript console script now detects `VencordNative.pluginHelpers.OrionQuests` and routes the CSP-blocked POSTs through the plugin's native module instead of failing. So `ACHIEVEMENT_IN_ACTIVITY` auto-completes from the standalone userscript too, as long as the Vencord plugin is also installed. Also probes `DiscordNative.http`, `DiscordNative.fileManager.fetchURL`, and a few sibling paths as a best-effort fallback in case a future Discord build exposes generic HTTP. On web Discord (no Vencord, no CSP), direct `fetch` works.

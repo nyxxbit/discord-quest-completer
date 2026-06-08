@@ -45,7 +45,7 @@ export default definePlugin({
     name: "OrionQuests",
     description:
         "Auto-complete every Discord Quest in seconds — game, video, stream, activity, and achievement quests.",
-    authors: [{ name: "nyxxbit", id: 0n }],
+    authors: [{ name: "syntt_", id: 1419678867005767783n }],
     settings,
 
     commands: [

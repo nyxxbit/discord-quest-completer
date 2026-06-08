@@ -10,7 +10,7 @@ A [Vencord](https://vencord.dev) userplugin port of [Orion](../README.md), the a
 
 ## Status
 
-**Functional, in sync with userscript v4.8.2.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
+**Functional, in sync with userscript v4.9.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
 
 **ACHIEVEMENT auto-bypass — confirmed working.** The userscript can run the OAuth2 authorize flow but Discord's renderer CSP blocks the final POST to `*.discordsays.com`. This plugin includes a native module (`native.ts`) that runs those POSTs in the Electron main process, where CSP doesn't apply &mdash; verified against a live `ACHIEVEMENT_IN_ACTIVITY` quest after the user passed age verification. Quests that are still age-gated (HTTP 403 code 50165 from `/proxy-tickets`) still skip; everything else now completes without launching the activity manually.
 
