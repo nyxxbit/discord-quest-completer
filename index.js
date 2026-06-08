@@ -1171,10 +1171,10 @@
             if (this._relayChecked) return this._relayAvailable;
             this._relayChecked = true;
             try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), 800);
-                const r = await fetch(`${this._relayUrl}/health`, { method: 'GET', signal: ctrl.signal });
-                clearTimeout(timer);
+                const r = await Promise.race([
+                    fetch(`${this._relayUrl}/health`, { method: 'GET' }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 800))
+                ]);
                 this._relayAvailable = r.ok;
                 if (r.ok) Logger.log('[Bypass] Orion Relay detected on 127.0.0.1:43210.', 'info');
             } catch (_) {
