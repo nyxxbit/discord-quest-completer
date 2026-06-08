@@ -10,9 +10,11 @@ A [Vencord](https://vencord.dev) userplugin port of [Orion](../README.md), the a
 
 ## Status
 
-**Functional, in sync with userscript v4.8.1.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
+**Functional, in sync with userscript v4.8.2.** Quest enrollment, all five task handlers (`VIDEO` / `GAME` / `STREAM` / `ACTIVITY` / `ACHIEVEMENT`), traffic queue with backoff, RunStore patching, and auto-claim are ported. A `/orion` slash command provides start / stop / status from any Discord channel.
 
-**The ACHIEVEMENT bypass actually works here.** The userscript port can run the OAuth2 authorize flow but Discord's renderer CSP blocks the final POST to `*.discordsays.com`. This plugin includes a native module (`native.ts`) that runs those POSTs in the Electron main process, where CSP doesn't apply &mdash; so the auto-bypass actually completes the quest without you having to launch the activity.
+**ACHIEVEMENT auto-bypass — confirmed working.** The userscript can run the OAuth2 authorize flow but Discord's renderer CSP blocks the final POST to `*.discordsays.com`. This plugin includes a native module (`native.ts`) that runs those POSTs in the Electron main process, where CSP doesn't apply &mdash; verified against a live `ACHIEVEMENT_IN_ACTIVITY` quest after the user passed age verification. Quests that are still age-gated (HTTP 403 code 50165 from `/proxy-tickets`) still skip; everything else now completes without launching the activity manually.
+
+**Bonus: also unlocks the standalone userscript.** v4.8.2 of `../index.js` detects this plugin's native module via `VencordNative.pluginHelpers.OrionQuests` and routes its discordsays POSTs through here. So pasting the userscript into the console works for `ACHIEVEMENT_IN_ACTIVITY` quests too, as long as this plugin is installed and enabled.
 
 The remaining gap from the userscript is the floating dashboard panel — progress is currently surfaced via Discord's native console + `/orion status` rather than a custom DOM overlay. That fits the Vencord usage model better, but if you want the panel back, see the open enhancement tracker.
 

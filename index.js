@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.8.1",
+        VERSION: "v4.8.2",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1155,11 +1155,76 @@
         //   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
         //   5) /oauth2/tokens + DELETE to clean up the grant
         //
-        // NOTE: Steps 3-4 are blocked by Discord's renderer CSP (connect-src
-        // doesn't include *.discordsays.com). This works on the Vencord port
-        // (main-process fetch) but the standalone userscript will fail at step 3.
-        // We attempt it anyway because some users run on web/modified clients
-        // where CSP is relaxed.
+        // Steps 3-4 are blocked by Discord's renderer CSP (connect-src doesn't
+        // include *.discordsays.com). _bypassPost picks the best available
+        // transport that escapes CSP: VencordNative if our plugin is installed,
+        // DiscordNative if it exposes anything, else direct fetch.
+        // POST to a CSP-restricted URL via the best available transport.
+        // Returns { ok, status, body } on success, throws { status, body } on HTTP error
+        // and TypeError on CSP/network. Probes in order: VencordNative plugin (CSP-free
+        // via IPC to main process), DiscordNative HTTP candidates (if any exist), raw fetch.
+        async _bypassPost(url, headers, jsonBody) {
+            // 1) Vencord plugin native module — works if user has OrionQuests Vencord plugin
+            //    installed (`vencord-plugin/native.ts`). Routes through Electron main process.
+            try {
+                const helper = window.VencordNative?.pluginHelpers?.OrionQuests;
+                if (helper) {
+                    const u = new URL(url);
+                    const appId = u.hostname.split('.')[0];
+                    const questId = headers['X-Discord-Quest-ID'];
+                    const referrer = headers['Referer'];
+                    if (u.pathname.endsWith('/acf/authorize')) {
+                        const { code } = JSON.parse(jsonBody);
+                        const r = await helper.discordsaysAuthorize({ appId, questId, authCode: code, referrer });
+                        if (!r.ok) throw { status: r.status, body: r.body };
+                        return { ok: true, status: r.status, body: r.body };
+                    }
+                    if (u.pathname.endsWith('/acf/quest/progress')) {
+                        const { progress } = JSON.parse(jsonBody);
+                        const token = headers['X-Auth-Token'];
+                        const r = await helper.discordsaysProgress({ appId, questId, token, target: progress, referrer });
+                        if (!r.ok) throw { status: r.status, body: r.body };
+                        return { ok: true, status: r.status, body: r.body };
+                    }
+                }
+            } catch (e) {
+                if (e?.status) throw e;
+                Logger.log(`[Bypass] VencordNative path errored: ${e?.message ?? e}`, 'debug');
+            }
+
+            // 2) DiscordNative HTTP probe. Best-effort — no documented method exists,
+            //    but new Discord builds occasionally expose one. We probe several
+            //    plausible paths and use the first that's a callable function.
+            const dn = window.DiscordNative;
+            if (dn) {
+                const probes = [
+                    () => dn.http?.makeRequest,
+                    () => dn.fileManager?.fetchURL,
+                    () => dn.processUtils?.fetch,
+                    () => dn.app?.makeRequest,
+                ];
+                for (const probe of probes) {
+                    try {
+                        const fn = probe();
+                        if (typeof fn === 'function') {
+                            const r = await fn.call(dn, { method: 'POST', url, headers, body: jsonBody });
+                            if (r && (r.status || r.statusCode)) {
+                                const status = r.status ?? r.statusCode;
+                                return { ok: status >= 200 && status < 300, status, body: r.body ?? r.responseText ?? '' };
+                            }
+                        }
+                    } catch (_) { /* try next probe */ }
+                }
+            }
+
+            // 3) Direct fetch — works on web Discord (no CSP) or relaxed clients.
+            //    CSP-blocked on Discord Desktop: throws TypeError "Failed to fetch".
+            const res = await fetch(url, { method: 'POST', headers, body: jsonBody });
+            const body = await res.text();
+            if (!res.ok) throw { status: res.status, body };
+            return { ok: true, status: res.status, body };
+        },
+
         async bypassAchievement(q, t) {
             const appId = q.config?.application?.id;
             if (!appId) return false;
@@ -1191,21 +1256,19 @@
 
                 const referrer = `https://${appId}.discordsays.com/?instance_id=example-cl-instance&platform=desktop&discord_proxy_ticket=${encodeURIComponent(proxyTicket)}`;
 
-                const dsAuthRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/authorize`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-Auth-Token': '', 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
-                    body: JSON.stringify({ code: authCode })
-                });
-                if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
-                const { token: dsToken } = await dsAuthRes.json();
+                const dsAuthRes = await Tasks._bypassPost(
+                    `https://${appId}.discordsays.com/.proxy/acf/authorize`,
+                    { 'Content-Type': 'application/json', 'X-Auth-Token': '', 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
+                    JSON.stringify({ code: authCode })
+                );
+                const { token: dsToken } = JSON.parse(dsAuthRes.body);
                 if (!dsToken) throw new Error('no discordsays token');
 
-                const progRes = await fetch(`https://${appId}.discordsays.com/.proxy/acf/quest/progress`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-Auth-Token': dsToken, 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
-                    body: JSON.stringify({ progress: t.target })
-                });
-                if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
+                await Tasks._bypassPost(
+                    `https://${appId}.discordsays.com/.proxy/acf/quest/progress`,
+                    { 'Content-Type': 'application/json', 'X-Auth-Token': dsToken, 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
+                    JSON.stringify({ progress: t.target })
+                );
 
                 Logger.log(`[Bypass] Success — "${t.name}" completed via Discord Says.`, 'success');
 

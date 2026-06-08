@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.8.1
+**Auto-complete every Discord Quest in seconds** &mdash; v4.8.2
 
-[![Version](https://img.shields.io/badge/v4.8.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.8.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -86,7 +86,7 @@ QuestStore → filter incomplete → JIT enroll → dispatch tasks → poll prog
 | **Game** | Injects a spoofed process into `RunStore` with real metadata from Discord's app registry |
 | **Stream** | Patches `StreamStore.getStreamerActiveStreamMetadata` with synthetic stream data |
 | **Activity** | Heartbeats against a voice channel to simulate participation |
-| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. **The final discordsays.com POST is blocked by Discord's renderer CSP in the userscript &mdash; works only via the [Vencord plugin port](vencord-plugin/) which routes through a main-process fetch.** Skips when both paths fail |
+| **Achievement** | Tries heartbeat spoof first; if Discord rejects, forges the Discord Says OAuth handshake to mark progress directly. The discordsays POSTs auto-route through the [Vencord plugin port](vencord-plugin/) when installed (confirmed working), or fall back to direct `fetch` for web Discord. On stock Discord Desktop the renderer CSP blocks the final POST &mdash; install the Vencord plugin alongside the userscript to unlock it. Skips cleanly on age-gated/delisted activities |
 
 ---
 
@@ -197,8 +197,11 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 
 ## Changelog
 
+### v4.8.2
+- **Userscript hands off discordsays POSTs to the Vencord plugin when installed** &mdash; New `_bypassPost` transport picker. On Discord Desktop with Vencord + OrionQuests plugin installed, the userscript console script now detects `VencordNative.pluginHelpers.OrionQuests` and routes the CSP-blocked POSTs through the plugin's native module instead of failing. So `ACHIEVEMENT_IN_ACTIVITY` auto-completes from the standalone userscript too, as long as the Vencord plugin is also installed. Also probes `DiscordNative.http`, `DiscordNative.fileManager.fetchURL`, and a few sibling paths as a best-effort fallback in case a future Discord build exposes generic HTTP. On web Discord (no Vencord, no CSP), direct `fetch` works.
+
 ### v4.8.1
-- **Honest CSP error message + Vencord native bypass** &mdash; Testing v4.8 surfaced that Discord's renderer CSP (`connect-src` allowlist) blocks the final `fetch()` to `*.discordsays.com` from the userscript. Steps 1-2 of the bypass (OAuth2 authorize + proxy-ticket mint) work; step 3 (POST to the activity backend) does not. The userscript now detects the CSP failure and prints a clear message pointing to the Vencord plugin instead of "Failed to fetch". The [Vencord plugin port](vencord-plugin/) gained a native module (`native.ts`) that runs the discordsays POSTs in the Electron main process where CSP doesn't apply &mdash; the auto-bypass actually completes there.
+- **Honest CSP error message + Vencord native bypass** &mdash; Testing v4.8 surfaced that Discord's renderer CSP (`connect-src` allowlist) blocks the final `fetch()` to `*.discordsays.com` from the userscript. Steps 1-2 of the bypass (OAuth2 authorize + proxy-ticket mint) work; step 3 (POST to the activity backend) does not. The userscript now detects the CSP failure and prints a clear message pointing to the Vencord plugin instead of "Failed to fetch". The [Vencord plugin port](vencord-plugin/) gained a native module (`native.ts`) that runs the discordsays POSTs in the Electron main process where CSP doesn't apply &mdash; **confirmed working in production against real ACHIEVEMENT_IN_ACTIVITY quests**.
 
 ### v4.8
 - **ACHIEVEMENT_IN_ACTIVITY auto-bypass** &mdash; New OAuth2 → discordsays.com handshake. When Discord's heartbeat endpoint rejects (HTTP 403, which it does for most current Achievement quests), Orion now authorizes against the activity's own backend, mints a proxy ticket, and POSTs the target progress directly. No more 25-minute passive wait, no more "join the activity manually". The previous picker toggle to skip these is now mandatory behavior &mdash; if both paths fail (typically age-gated or delisted activities like *The Odyssey*), the quest is skipped cleanly instead of blocking a queue slot. **Note: the discordsays.com POSTs are blocked by Discord's renderer CSP &mdash; the userscript can only complete the OAuth handshake locally. See [v4.8.1](#v481) for the workaround.**
