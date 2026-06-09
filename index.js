@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.9",
+        VERSION: "v4.9.1",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1513,45 +1513,54 @@
     function loadModules() {
         try {
             // === VENCORD USAGE ===
+            // Wrapped in its own try/catch: Vencord's Webpack API can throw
+            // internally (e.g. "Cannot read properties of undefined (reading 'c')"
+            // when its wreq module cache isn't ready on some builds — issue #34).
+            // Such a throw must NOT abort the loader; fall through to the native
+            // extraction below, which is fully guarded and build-resilient.
             if (typeof window.Vencord !== 'undefined' && window.Vencord.Webpack) {
-                Logger.log('[System] Vencord detected. Using Vencord Webpack API...', 'info');
-                const W = window.Vencord.Webpack;
-
-                let routerModule;
                 try {
-                    const m = W.findByCode('transitionTo -');
-                    if (m) {
-                        for (const prop of [m, m.default, ...Object.values(m)]) {
-                            if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
-                                routerModule = { transitionTo: prop };
-                                break;
+                    Logger.log('[System] Vencord detected. Using Vencord Webpack API...', 'info');
+                    const W = window.Vencord.Webpack;
+
+                    let routerModule;
+                    try {
+                        const m = W.findByCode('transitionTo -');
+                        if (m) {
+                            for (const prop of [m, m.default, ...Object.values(m)]) {
+                                if (typeof prop === 'function' && prop.toString().includes('transitionTo -')) {
+                                    routerModule = { transitionTo: prop };
+                                    break;
+                                }
                             }
                         }
+                    } catch (e) { }
+
+                    Mods = {
+                        QuestStore: W.findStore('QuestStore') || W.findStore('QuestsStore'),
+                        RunStore: W.findStore('RunningGameStore'),
+                        StreamStore: W.findStore('ApplicationStreamingStore'),
+                        ChanStore: W.findStore('ChannelStore'),
+                        GuildChanStore: W.findStore('GuildChannelStore'),
+                        Dispatcher: W.Common?.FluxDispatcher || W.findByProps('dispatch', 'subscribe', 'flushWaitQueue'),
+                        API: W.Common?.RestAPI || W.findByProps('get', 'post', 'del'),
+                        Router: routerModule
+                    };
+
+                    const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
+                    const missing = required.filter(k => !Mods[k]);
+
+                    if (missing.length === 0) {
+                        const optional =['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
+                        optional.forEach(k => { if (!Mods[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
+
+                        Patcher.init(Mods.RunStore);
+                        return true;
                     }
-                } catch (e) { }
-
-                Mods = {
-                    QuestStore: W.findStore('QuestStore') || W.findStore('QuestsStore'),
-                    RunStore: W.findStore('RunningGameStore'),
-                    StreamStore: W.findStore('ApplicationStreamingStore'),
-                    ChanStore: W.findStore('ChannelStore'),
-                    GuildChanStore: W.findStore('GuildChannelStore'),
-                    Dispatcher: W.Common?.FluxDispatcher || W.findByProps('dispatch', 'subscribe', 'flushWaitQueue'),
-                    API: W.Common?.RestAPI || W.findByProps('get', 'post', 'del'),
-                    Router: routerModule
-                };
-
-                const required = ['QuestStore', 'API', 'Dispatcher', 'RunStore'];
-                const missing = required.filter(k => !Mods[k]);
-
-                if (missing.length === 0) {
-                    const optional =['StreamStore', 'ChanStore', 'GuildChanStore', 'Router'];
-                    optional.forEach(k => { if (!Mods[k]) Logger.log(`[System] Optional module '${k}' not found. Features may be limited.`, 'warn'); });
-
-                    Patcher.init(Mods.RunStore);
-                    return true;
+                    Logger.log(`[System] Vencord extraction missed: ${missing.join(', ')}. Falling back to native...`, 'warn');
+                } catch (e) {
+                    Logger.log(`[System] Vencord Webpack API threw (${e?.message ?? e}). Falling back to native...`, 'warn');
                 }
-                Logger.log(`[System] Vencord extraction missed: ${missing.join(', ')}. Falling back to native...`, 'warn');
             }
 
             // === NATIVE FALLBACK (Canary / PTB without mods) ===
