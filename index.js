@@ -20,7 +20,12 @@
         MAX_TIME: 25 * 60 * 1000,       // hard abort per task (25 min)
         MAX_TASK_FAILURES: 5,           // consecutive network failures
         MAX_RETRIES: 3,                 // 429/5xx transient error retries
+        // Vesktop/Equicord/Legcord load Discord's web build inside Electron and
+        // expose VesktopNative instead of DiscordNative, so the DiscordNative-only
+        // check produced a false negative and skipped GAME/STREAM quests (#35).
         IS_DESKTOP: typeof window.DiscordNative !== 'undefined'
+            || typeof window.VesktopNative !== 'undefined'
+            || /\bElectron\//.test(navigator.userAgent)
     });
 
     // mutable runtime state lives here, CONFIG stays read-only
