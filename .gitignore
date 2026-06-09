@@ -1,3 +1,8 @@
 .claude/
 diagnostics.js
 debug-modules.js
+
+# orion-vencord-bundle build outputs
+tools/orion-vencord-bundle/dist/
+tools/orion-vencord-bundle-v*.zip
+tools/orion-relay-v*.zip

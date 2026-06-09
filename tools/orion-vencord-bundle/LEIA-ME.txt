@@ -1,0 +1,90 @@
+==============================================================
+                  ORION QUESTS - LEIA-ME
+==============================================================
+
+Auto-complete quests do Discord. Funciona com TODOS os tipos:
+- Video (assistir trailer)
+- Game (jogar X minutos)
+- Stream (compartilhar tela)
+- Activity (estar em call com activity)
+- Achievement (completar in-game) <- a parte dificil, ja resolvida
+
+
+==============================================================
+                    INSTALACAO RAPIDA
+==============================================================
+
+1) INSTALAR O VENCORD (uma vez so, pula se ja tem)
+   - Abre o navegador
+   - Vai em: https://vencord.dev/download
+   - Baixa o instalador do Windows
+   - Roda o instalador e clica "Install"
+   - Aceita reiniciar o Discord se pedir
+
+2) INSTALAR O ORIONQUESTS
+   - Da DUPLO CLIQUE em "INSTALAR.cmd" (que veio neste zip)
+   - Espera ele terminar (vai abrir uma janela preta)
+   - Pronto, ele cuida de tudo: fecha o Discord, copia
+     os arquivos, abre o Discord de novo
+
+3) ATIVAR O PLUGIN NO DISCORD
+   - No Discord, abre as Configuracoes (engrenagem em baixo)
+   - Rola ate a secao "Vencord" (no menu da esquerda)
+   - Clica em "Plugins"
+   - Na busca, digite "OrionQuests"
+   - Liga o toggle (botao azul)
+   - Se aparecer um botao "Restart" ou "Reload", clica
+
+
+==============================================================
+                       COMO USAR
+==============================================================
+
+Em qualquer canal do Discord, digite:
+
+  /orion start    -- comeca a auto-completar todos os quests
+  /orion stop     -- para
+  /orion status   -- ve em quais quests esta trabalhando
+
+O console do navegador (Ctrl+Shift+I no Discord) mostra o
+log detalhado se voce quiser acompanhar.
+
+
+==============================================================
+                  PROBLEMAS COMUNS
+==============================================================
+
+"O instalador disse pra eu instalar o Vencord primeiro"
+  Faz o passo 1 do INSTALACAO RAPIDA acima. Depois roda o
+  INSTALAR.cmd de novo.
+
+"Nao aparece 'OrionQuests' na lista de Plugins"
+  Verifica se voce fechou o Discord PELA BANDEJA do sistema
+  (clica direito no icone perto do relogio -> Quit Discord).
+  Fechar so a janela nao funciona.
+
+"O plugin ta ativado mas /orion start nao faz nada"
+  Da Ctrl+R no Discord pra recarregar.
+
+"Quest Activity nao completa, da erro 50165"
+  Voce precisa verificar sua idade no Discord pra essa
+  Activity especifica. Vai em Configuracoes do Usuario ->
+  Privacidade e Seguranca -> Maturidade -> verifica idade.
+
+"Apos atualizar o Vencord, o plugin sumiu"
+  O instalador oficial do Vencord sobrescreveu nossos
+  arquivos. Roda o INSTALAR.cmd de novo.
+
+
+==============================================================
+                  AVISOS IMPORTANTES
+==============================================================
+
+* Usar mods no Discord viola os Termos de Servico. Risco de
+  ban e SEU. Tem casos relatados de avisos pos abril/2026.
+
+* O plugin so completa quests que VOCE tem disponivel na
+  sua conta. Nao da pra "minerar" recompensas que nao foram
+  oferecidas pra voce.
+
+* Fonte do projeto: github.com/nyxxbit/discord-quest-completer
