@@ -21,10 +21,12 @@ import { rnd, sleep } from "./util";
 
 const logger = new Logger("OrionQuests");
 
-// `window.DiscordNative` is exposed by Discord's Electron preload; absent in
-// the web/Vencord-Web build. GAME/STREAM quests need the desktop process-
-// injection path, so we skip them silently when running in a browser context.
-const IS_DESKTOP = typeof (window as any).DiscordNative !== "undefined";
+// GAME/STREAM quests need the desktop process-injection path, so we skip them
+// silently when running in a browser context. Use Vencord's build-time globals
+// (IS_DISCORD_DESKTOP / IS_VESKTOP) instead of probing window.DiscordNative —
+// the preload global isn't reliably visible from the plugin's execution context,
+// which made the desktop build wrongly skip game quests (issue #35).
+const IS_DESKTOP = IS_DISCORD_DESKTOP || IS_VESKTOP;
 
 // Tiny Web Audio synth that mirrors the userscript's Sound module. 'tick'
 // fires after each quest completes; 'done' fires when the whole queue is
