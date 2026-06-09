@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.9
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9.1
 
-[![Version](https://img.shields.io/badge/v4.9-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -196,6 +196,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9.1
+- **Vesktop / Electron client mods no longer skip `GAME`/`STREAM` quests** &mdash; `IS_DESKTOP` only checked for `window.DiscordNative`, which Vesktop doesn't expose (it loads Discord's web build inside Electron and exposes `VesktopNative` instead &mdash; the same reason Discord shows Vesktop users as "Web"). So every play/stream quest hit the `"requires desktop app. Skipping."` guard even though the fake-`RunningGameStore` completion path works fine there. Detection now also accepts `window.VesktopNative` and an `Electron/` user-agent, covering Vesktop, Equicord, and Legcord. Fixes [#35](https://github.com/nyxxbit/discord-quest-completer/issues/35).
 
 ### v4.9
 - **`ACHIEVEMENT_IN_ACTIVITY` auto-bypass works on stock Discord Desktop** &mdash; no Vencord, no BetterDiscord, no client mod. The trick is a tiny localhost HTTP relay ([`tools/orion-relay/`](tools/orion-relay/)) that the userscript probes on boot. Discord's CSP allows `connect-src http://127.0.0.1:*` (for RPC with games); the relay forwards POSTs to `*.discordsays.com` from outside the browser sandbox. One PowerShell script + one `.cmd` launcher, ~100 lines total. Download from the release page, double-click to start, leave the window open, paste the userscript. Done.
