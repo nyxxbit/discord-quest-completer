@@ -21,10 +21,15 @@ import { rnd, sleep } from "./util";
 
 const logger = new Logger("OrionQuests");
 
-// `window.DiscordNative` is exposed by Discord's Electron preload; absent in
-// the web/Vencord-Web build. GAME/STREAM quests need the desktop process-
-// injection path, so we skip them silently when running in a browser context.
-const IS_DESKTOP = typeof (window as any).DiscordNative !== "undefined";
+// `window.DiscordNative` is exposed by Discord's Electron preload, but Vesktop
+// (and Equicord/Legcord) load Discord's *web* build inside Electron and expose
+// `VesktopNative` instead — so a DiscordNative-only check false-negatives there
+// and skips GAME/STREAM quests (#35). Accept any Electron host; only a plain
+// browser tab (no native bridge, non-Electron UA) is treated as web.
+const IS_DESKTOP =
+    typeof (window as any).DiscordNative !== "undefined" ||
+    typeof (window as any).VesktopNative !== "undefined" ||
+    /\bElectron\//.test(navigator.userAgent);
 
 // Tiny Web Audio synth that mirrors the userscript's Sound module. 'tick'
 // fires after each quest completes; 'done' fires when the whole queue is
