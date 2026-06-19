@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.9.1
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9.2
 
-[![Version](https://img.shields.io/badge/v4.9.1-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -196,6 +196,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9.2
+- **Cleaner picker when the options panel is open** &mdash; Clicking the gear now hides the quest list and the START/DESELECT buttons while the options are showing, so the panel isn't buried under a long quest list. Click the gear again to bring them back. Minor CSS spacing fixes too. Thanks to @TirOFlanc in [#37](https://github.com/nyxxbit/discord-quest-completer/pull/37).
 
 ### v4.9.1
 - **Fix: Vencord plugin skipped GAME/STREAM quests on desktop** &mdash; The plugin detected "desktop" by probing `window.DiscordNative`, which isn't reliably visible from the plugin's execution context. Game quests were wrongly skipped with `requires desktop app. Skipping.` even on Discord Desktop, while the userscript handled them fine. Switched to Vencord's build-time `IS_DISCORD_DESKTOP` / `IS_VESKTOP` globals. Resolves [#35](https://github.com/nyxxbit/discord-quest-completer/issues/35).
