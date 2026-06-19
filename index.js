@@ -226,7 +226,7 @@
                 .reward-filter:hover, .type-filter:hover { background-color: color-mix(in srgb, currentColor 25%, transparent); }
                 .reward-filter.off, .type-filter.off { background: transparent; color: var(--text-muted); opacity: 0.4; }
 
-                .picker-quest-list { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 50px; overflow-y: auto; padding-right: 4px; margin-bottom: 12px; }
+                .picker-quest-list { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 50px; overflow-y: auto; padding-right: 4px; }
 
                 .quest-pick { display: flex; gap: 12px; padding: 10px; background: var(--control-secondary-background-default); border-radius: var(--radius-sm); border: 1px solid var(--border-muted); border-left-width: 4px; cursor: pointer; transition: 0.2s; align-items: center; user-select: none; flex-shrink: 0; }
                 .quest-pick:hover { filter: brightness(1.15); }
@@ -241,7 +241,7 @@
                 .native-cb:checked { background: var(--checkbox-background-selected-default); border-color: var(--checkbox-border-selected-default); }
                 .native-cb:checked::before { opacity: 1; }
 
-                .picker-options { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; flex-shrink: 0; }
+                .picker-options { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
                 .orion-option { display: flex; justify-content: space-between; align-items: center; background: var(--control-secondary-background-default); padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-muted); }
                 .orion-option-label { font-size: 13px; font-weight: 500; color: var(--text-default); }
 
@@ -250,7 +250,7 @@
                 .native-toggle:checked { background: var(--control-primary-background-default); }
                 .native-toggle:checked::after { transform: translateX(20px); }
 
-                .picker-actions { display: flex; gap: 10px; border-top: 1px solid var(--border-subtle); padding-top: 8px; flex-shrink: 0; }
+                .picker-actions { display: flex; gap: 10px; padding-top: 12px; flex-shrink: 0; }
                 .quest-pick-btn { flex: 1; padding: 10px; border: 1px solid; border-radius: var(--radius-sm, 8px); font-size: 13px; font-weight: 700; cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px; font-family: inherit; color: #fff;}
                 .quest-pick-btn.start { background-color: var(--control-connected-background-default); border-color: var(--control-connected-border-default); }
                 .quest-pick-btn.start:hover:not(:disabled) { background: var(--control-connected-background-hover); border-color: var(--control-connected-border-hover); }
@@ -659,7 +659,10 @@
                 document.getElementById('orion-opts').addEventListener('click', () => {
                     const panel = document.getElementById('orion-options-panel');
                     if (!panel) return;
-                    panel.style.display = panel.style.display === 'none' ? '' : 'none';
+                    const open = panel.style.display === 'none';
+                    panel.style.display = open ? '' : 'none';
+                    document.getElementById('orion-quest-list').style.display = open ? 'none' : '';
+                    form.querySelector('.picker-actions').style.display = open ? 'none' : '';
                 });
 
                 const form = document.getElementById('orion-picker-form');
