@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.9.2
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9.3
 
-[![Version](https://img.shields.io/badge/v4.9.2-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9.3-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -19,7 +19,9 @@ Completes all Discord Quests automatically &mdash; game, video, stream, activity
 ---
 
 > [!CAUTION]
-> **Discord is actively cracking down on quest automation (April 2026+).** Some users have received system messages flagging their accounts after running automation tools (any tool — not just this one). The risk has shifted from theoretical to real. Use at your own discretion. Honest summary of the trade-off: faster Orbs vs. a non-zero chance of a quest-rewards strike on your account.
+> **Discord is actively cracking down on quest automation (April 2026+).** Some users have received system messages flagging their accounts after running automation tools (any tool, not just this one). The risk is real now, and enforcement can hit the entire Discord account, not only quest rewards. Use at your own discretion. Honest trade-off: faster Orbs vs a non-zero chance of an account strike.
+>
+> **The `ACHIEVEMENT_IN_ACTIVITY` bypass does more than spoof progress.** To complete those quests it runs a real OAuth2 authorization against the quest's application (scopes `identify applications.commands applications.entitlements`), mints a proxy ticket, posts forged progress to the activity backend at `discordsays.com`, then revokes the authorization it created. Full flow: `authorize -> proxy ticket -> discordsays authorize -> discordsays progress -> revoke`. It is forging quest progress on a logged-in account, which is exactly what Discord is enforcing against. If you don't want that on your main account, don't run it there.
 
 ---
 
@@ -196,6 +198,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9.3
+- **Security hardening of the ACHIEVEMENT bypass** &mdash; From a detailed security report ([#38](https://github.com/nyxxbit/discord-quest-completer/issues/38)). The OAuth grant cleanup now runs in a `finally` block, so a failed bypass never leaves the quest's app authorized on your account, and it only revokes the grant Orion created (diffed against a pre-flow snapshot of your existing grants) so it can never delete an authorization you made yourself. The localhost relay no longer follows redirects and rejects any host or path outside the two `discordsays.com` endpoints it needs. The userscript and the Vencord native module both validate the application id is numeric before building any URL (closes the SSRF angle). The README now spells out the full OAuth lifecycle and the account-level ban risk. The non-tech installer bundle is English-only now (`INSTALL.cmd`).
 
 ### v4.9.2
 - **Cleaner picker when the options panel is open** &mdash; Clicking the gear now hides the quest list and the START/DESELECT buttons while the options are showing, so the panel isn't buried under a long quest list. Click the gear again to bring them back. Minor CSS spacing fixes too. Thanks to @TirOFlanc in [#37](https://github.com/nyxxbit/discord-quest-completer/pull/37).

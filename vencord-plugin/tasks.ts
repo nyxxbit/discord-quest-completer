@@ -301,6 +301,23 @@ export class TaskRunner {
     async bypassAchievement(q: Quest, t: TaskInfo): Promise<boolean> {
         const appId = q.config?.application?.id;
         if (!appId) return false;
+        // appId is interpolated straight into discordsays URLs. Refuse anything
+        // non-numeric so a malformed/hostile id can't redirect the request elsewhere.
+        if (!/^\d+$/.test(String(appId))) {
+            logger.warn(`[Bypass] Refusing non-numeric appId "${appId}".`);
+            return false;
+        }
+
+        // Snapshot the grants this app already has BEFORE we authorize, so cleanup
+        // revokes only the grant we create and never one the user made themselves.
+        let preGrantIds: Set<string> | null = null;
+        try {
+            const before: any = await this.stores.API.get({ url: "/oauth2/tokens" });
+            preGrantIds = new Set((before?.body || []).filter((tk: any) => tk.application?.id === appId).map((tk: any) => tk.id));
+        } catch (e: any) {
+            logger.debug(`[Bypass] Grant snapshot failed; skipping cleanup to stay safe: ${e?.message}`);
+        }
+
         try {
             logger.info(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`);
 
@@ -339,15 +356,6 @@ export class TaskRunner {
             if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
 
             logger.info(`[Bypass] Success — "${t.name}" completed via Discord Says.`);
-
-            // cleanup: remove the OAuth2 grant we just created so the app isn't left authorized
-            try {
-                const tokens: any = await this.stores.API.get({ url: "/oauth2/tokens" });
-                const grant = (tokens?.body || []).find((tk: any) => tk.application?.id === appId);
-                if (grant) await this.stores.API.del({ url: `/oauth2/tokens/${grant.id}` });
-            } catch (e: any) {
-                logger.debug(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`);
-            }
             return true;
         } catch (e: any) {
             const code = e?.body?.code;
@@ -365,6 +373,20 @@ export class TaskRunner {
             else if (e) { try { parts.push(JSON.stringify(e).slice(0, 200)); } catch { parts.push(String(e)); } }
             logger.warn(`[Bypass] Failed: ${parts.join(" — ") || "unknown"}`);
             return false;
+        } finally {
+            // Revoke ONLY the grant we created, diffed against the pre-flow snapshot.
+            // Runs whether progress succeeded or threw, so a failed bypass never leaves
+            // the app authorized on the user's account.
+            if (preGrantIds) {
+                const snap = preGrantIds;
+                try {
+                    const after: any = await this.stores.API.get({ url: "/oauth2/tokens" });
+                    const ours = (after?.body || []).filter((tk: any) => tk.application?.id === appId && !snap.has(tk.id));
+                    for (const g of ours) await this.stores.API.del({ url: `/oauth2/tokens/${g.id}` });
+                } catch (e: any) {
+                    logger.debug(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`);
+                }
+            }
         }
     }
 

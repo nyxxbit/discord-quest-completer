@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.9.2",
+        VERSION: "v4.9.3",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -1266,6 +1266,24 @@
         async bypassAchievement(q, t) {
             const appId = q.config?.application?.id;
             if (!appId) return false;
+            // appId is interpolated straight into discordsays URLs. Refuse anything
+            // non-numeric so a malformed/hostile id can't redirect the request elsewhere.
+            if (!/^\d+$/.test(String(appId))) {
+                Logger.log(`[Bypass] Refusing non-numeric appId "${appId}".`, 'warn');
+                return false;
+            }
+
+            // Snapshot the grants this app already has BEFORE we authorize, so cleanup
+            // revokes only the grant we create and never one the user made themselves.
+            // If the snapshot fails we leave cleanup off rather than guess and delete the wrong grant.
+            let preGrantIds = null;
+            try {
+                const before = await Mods.API.get({ url: '/oauth2/tokens' });
+                preGrantIds = new Set((before?.body || []).filter(tk => tk.application?.id === appId).map(tk => tk.id));
+            } catch (e) {
+                Logger.log(`[Bypass] Grant snapshot failed; skipping cleanup to stay safe: ${e?.message}`, 'debug');
+            }
+
             try {
                 Logger.log(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`, 'info');
 
@@ -1309,16 +1327,6 @@
                 );
 
                 Logger.log(`[Bypass] Success — "${t.name}" completed via Discord Says.`, 'success');
-
-                // cleanup: remove the OAuth2 grant we just created so the app isn't left authorized
-                try {
-                    const tokens = await Mods.API.get({ url: '/oauth2/tokens' });
-                    const grant = (tokens?.body || []).find(tk => tk.application?.id === appId);
-                    if (grant) await Mods.API.del({ url: `/oauth2/tokens/${grant.id}` });
-                } catch (e) {
-                    Logger.log(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`, 'debug');
-                }
-
                 return true;
             } catch (e) {
                 // Discord renderer CSP blocks connect-src to *.discordsays.com. fetch() throws
@@ -1344,6 +1352,19 @@
                 else if (e) { try { parts.push(JSON.stringify(e).slice(0, 200)); } catch { parts.push(String(e)); } }
                 Logger.log(`[Bypass] Failed: ${parts.join(' — ') || 'unknown'}`, 'warn');
                 return false;
+            } finally {
+                // Revoke ONLY the grant we created, diffed against the pre-flow snapshot.
+                // Runs whether the progress call succeeded or threw, so a failed bypass
+                // never leaves the app authorized on the user's account.
+                if (preGrantIds) {
+                    try {
+                        const after = await Mods.API.get({ url: '/oauth2/tokens' });
+                        const ours = (after?.body || []).filter(tk => tk.application?.id === appId && !preGrantIds.has(tk.id));
+                        for (const g of ours) await Mods.API.del({ url: `/oauth2/tokens/${g.id}` });
+                    } catch (e) {
+                        Logger.log(`[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`, 'debug');
+                    }
+                }
             }
         },
 

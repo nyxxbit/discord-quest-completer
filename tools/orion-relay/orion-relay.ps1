@@ -81,8 +81,15 @@ while ($listener.IsListening) {
             $payload = $raw | ConvertFrom-Json
 
             $upstreamUri = [System.Uri]::new($payload.url)
-            if ($upstreamUri.Host -notmatch $allowedHostPattern) {
+            # Only allow https to a numeric-id discordsays host, and only the two acf paths
+            # the bypass actually uses. Everything else is refused so the relay can't be used
+            # as an open proxy into other hosts or paths while it is running.
+            if ($upstreamUri.Scheme -ne 'https' -or $upstreamUri.Host -notmatch $allowedHostPattern) {
                 Write-Response $ctx 403 "{`"ok`":false,`"status`":0,`"body`":`"host not allowed: $($upstreamUri.Host)`"}"
+                continue
+            }
+            if ($upstreamUri.AbsolutePath -notmatch '^/\.proxy/acf/(authorize|quest/progress)$') {
+                Write-Response $ctx 403 "{`"ok`":false,`"status`":0,`"body`":`"path not allowed: $($upstreamUri.AbsolutePath)`"}"
                 continue
             }
 
@@ -92,7 +99,9 @@ while ($listener.IsListening) {
             $upstream.Method = 'POST'
             $upstream.ContentType = 'application/json'
             $upstream.UserAgent = 'OrionRelay/1.0'
-            $upstream.AllowAutoRedirect = $true
+            # No redirect following. The allowed host/path set is fixed, so a redirect could
+            # only point somewhere we did not whitelist. Refuse to follow it.
+            $upstream.AllowAutoRedirect = $false
             $upstream.Timeout = 20000
 
             foreach ($pair in $payload.headers.PSObject.Properties) {
