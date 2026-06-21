@@ -35,7 +35,10 @@ Write-Host "==========================================" -ForegroundColor Cyan
 function Write-Response {
     param($ctx, [int]$status, [string]$body, [string]$contentType = 'application/json')
     $ctx.Response.StatusCode = $status
-    $ctx.Response.Headers['Access-Control-Allow-Origin'] = '*'
+    # Reflect the CORS origin only for Discord (computed per-request). Other sites then
+    # can't read our responses, so a random open browser tab can't drive the relay.
+    # Non-browser callers send no Origin and don't need CORS at all.
+    if ($script:allowOrigin) { $ctx.Response.Headers['Access-Control-Allow-Origin'] = $script:allowOrigin }
     $ctx.Response.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
     $ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     $ctx.Response.Headers['Cache-Control'] = 'no-store'
@@ -59,6 +62,17 @@ while ($listener.IsListening) {
     $path = $req.Url.AbsolutePath
     $method = $req.HttpMethod
 
+    # Reflect CORS only back to Discord origins; everything else gets no ACAO header.
+    $reqOrigin = $req.Headers['Origin']
+    if ($reqOrigin -match '^https://([a-z0-9-]+\.)?discord\.com$') { $script:allowOrigin = $reqOrigin } else { $script:allowOrigin = $null }
+
+    # Reject anything not addressed to our exact loopback host (basic DNS-rebinding guard).
+    $hostHeader = $req.Headers['Host']
+    if ($hostHeader -and $hostHeader -ne "127.0.0.1:$port") {
+        Write-Response $ctx 403 '{"ok":false,"status":0,"body":"bad host"}'
+        continue
+    }
+
     # CORS preflight — any path
     if ($method -eq 'OPTIONS') {
         Write-Response $ctx 204 ''
@@ -75,6 +89,12 @@ while ($listener.IsListening) {
     if ($method -eq 'POST' -and $path -eq '/proxy') {
         $responded = $false
         try {
+            # Cap the inbound body. The bypass payloads are tiny; a single-threaded ReadToEnd
+            # on a huge body would be a trivial local DoS.
+            if ($req.ContentLength64 -gt 65536) {
+                Write-Response $ctx 413 '{"ok":false,"status":0,"body":"payload too large"}'
+                continue
+            }
             $reader = New-Object System.IO.StreamReader($req.InputStream, $req.ContentEncoding)
             $raw = $reader.ReadToEnd()
             $reader.Dispose()
@@ -107,13 +127,16 @@ while ($listener.IsListening) {
             foreach ($pair in $payload.headers.PSObject.Properties) {
                 $name = $pair.Name
                 $value = [string]$pair.Value
+                # Strict allowlist — only the headers the bypass actually needs. Anything else
+                # a caller tries to smuggle through (Cookie, X-Forwarded-For, etc.) is dropped.
                 switch ($name.ToLowerInvariant()) {
-                    'content-type'  { $upstream.ContentType = $value }
-                    'user-agent'    { $upstream.UserAgent = $value }
-                    'referer'       { $upstream.Referer = $value }
-                    'accept'        { $upstream.Accept = $value }
-                    'host'          { } # skip — derived from URL
-                    default         { $upstream.Headers[$name] = $value }
+                    'content-type'       { $upstream.ContentType = $value }
+                    'user-agent'         { $upstream.UserAgent = $value }
+                    'referer'            { $upstream.Referer = $value }
+                    'accept'             { $upstream.Accept = $value }
+                    'x-auth-token'       { $upstream.Headers['X-Auth-Token'] = $value }
+                    'x-discord-quest-id' { $upstream.Headers['X-Discord-Quest-ID'] = $value }
+                    default              { } # drop
                 }
             }
 

@@ -36,7 +36,7 @@ function statusSummary(): string {
     if (entries.length === 0) return isRunning ? "Running. No active tasks yet." : "Idle.";
     const lines = entries.map(e => {
         const pct = e.max > 0 ? Math.min(100, (e.cur / e.max) * 100).toFixed(0) : "?";
-        return `• ${e.name} — ${e.status} (${pct}%)`;
+        return `• ${e.name}: ${e.status} (${pct}%)`;
     });
     return [`${isRunning ? "Running" : "Stopped"}, ${entries.length} task(s):`, ...lines].join("\n");
 }

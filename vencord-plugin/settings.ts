@@ -18,6 +18,13 @@ export const settings = definePluginSettings({
         default: false,
     },
 
+    achievementBypass: {
+        type: OptionType.BOOLEAN,
+        description:
+            "Auto-complete ACHIEVEMENT_IN_ACTIVITY quests by OAuth-authorizing the quest's app on your account (scopes: identify, applications.commands, applications.entitlements), reporting progress to the activity backend, then revoking the grant right after. This automates your logged-in account and can put the WHOLE account at risk under Discord's quest-automation enforcement. Off by default — turning it on is your explicit consent.",
+        default: false,
+    },
+
     tryToClaimReward: {
         type: OptionType.BOOLEAN,
         description:

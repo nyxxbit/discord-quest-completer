@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.9.3",
+        VERSION: "v4.9.4",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -35,12 +35,16 @@
 
     /* ── audio cue ───────────────────────────────────────────────── */
     const Sound = {
+        _ctx: null,
         play(type) {
             if (!RUNTIME.playSound) return;
             try {
                 const Ctx = window.AudioContext || window.webkitAudioContext;
                 if (!Ctx) return;
-                const ctx = new Ctx();
+                // reuse one context; Chromium caps ~6 concurrent AudioContexts and a long
+                // run with sound on would otherwise hit the cap and go silently dead.
+                if (!this._ctx || this._ctx.state === 'closed') this._ctx = new Ctx();
+                const ctx = this._ctx;
                 const o = ctx.createOscillator();
                 const g = ctx.createGain();
                 o.connect(g); g.connect(ctx.destination);
@@ -61,6 +65,60 @@
                     o.start(t0); o.stop(t0 + 0.2);
                 }
             } catch (_) { }
+        }
+    };
+
+    /* ── OAuth consent gate ──────────────────────────────────────
+       Shown before the ACHIEVEMENT bypass OAuth-authorizes a quest's
+       app on the user's account. Per-app, per-run, in-memory only —
+       never persisted, so it can't silently authorize forever. Default
+       decline: Cancel / Esc / backdrop / 60s idle all resolve false, so
+       an AFK user never authorizes anything. CSP-safe (addEventListener,
+       app name via textContent so it can't inject markup).
+    ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── ── */
+    const Consent = {
+        _granted: new Set(),
+        TIMEOUT: 60000,
+        SCOPES: ['identify', 'applications.commands', 'applications.entitlements'],
+        ask(appId, appName) {
+            if (this._granted.has(appId)) return Promise.resolve(true);
+            return new Promise(resolve => {
+                const ov = document.createElement('div');
+                ov.id = 'orion-consent';
+                ov.style.cssText = 'position:fixed;inset:0;z-index:1002;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);font-family:var(--font-primary);';
+                ov.innerHTML = `<div style="width:420px;max-width:92vw;background:var(--background-base-low);border:1px solid var(--border-subtle);border-radius:var(--radius-lg);box-shadow:var(--shadow-button-overlay);color:var(--text-default);overflow:hidden;">
+                    <div style="padding:14px 16px;background:var(--background-mod-muted);border-bottom:1px solid var(--border-subtle);font-weight:700;color:var(--text-strong);">Authorize application?</div>
+                    <div style="padding:16px;font-size:13px;line-height:1.5;">
+                        <div>To complete this achievement quest, Orion needs to OAuth-authorize this app on your Discord account:</div>
+                        <div id="oc-app" style="font-weight:700;color:var(--text-strong);margin:6px 0;"></div>
+                        <div style="color:var(--text-muted);">Scopes requested:</div>
+                        <ul id="oc-scopes" style="margin:4px 0 10px;padding-left:18px;color:var(--text-muted);"></ul>
+                        <div style="color:var(--text-feedback-warning);">The app's backend receives a real authorization code. Orion revokes the grant immediately after the quest is marked complete. Discord enforcement against quest automation can affect the whole account.</div>
+                        <label style="display:flex;gap:8px;align-items:center;margin-top:12px;font-size:12px;color:var(--text-muted);">
+                            <input type="checkbox" id="oc-remember" class="native-cb"> Don't ask again for this app this session</label>
+                    </div>
+                    <div style="display:flex;gap:10px;padding:12px 16px;border-top:1px solid var(--border-subtle);">
+                        <button id="oc-no" class="quest-pick-btn deselect" style="flex:1;">Cancel</button>
+                        <button id="oc-yes" class="quest-pick-btn start" style="flex:1;">Authorize</button>
+                    </div></div>`;
+                document.body.appendChild(ov);
+                ov.querySelector('#oc-app').textContent = appName ? `${appName} (${appId})` : `App ${appId}`;
+                const ul = ov.querySelector('#oc-scopes');
+                this.SCOPES.forEach(s => { const li = document.createElement('li'); li.textContent = s; ul.appendChild(li); });
+                let done = false;
+                const finish = v => {
+                    if (done) return; done = true;
+                    clearTimeout(timer); document.removeEventListener('keydown', onKey);
+                    if (v && ov.querySelector('#oc-remember').checked) this._granted.add(appId);
+                    ov.remove(); resolve(v);
+                };
+                const onKey = e => { if (e.key === 'Escape') finish(false); };
+                ov.querySelector('#oc-yes').addEventListener('click', () => finish(true));
+                ov.querySelector('#oc-no').addEventListener('click', () => finish(false));
+                ov.addEventListener('mousedown', e => { if (e.target === ov) finish(false); });
+                document.addEventListener('keydown', onKey);
+                const timer = setTimeout(() => finish(false), this.TIMEOUT);
+            });
         }
     };
 
@@ -97,6 +155,17 @@
 
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const rnd = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+    // Escape server-controlled strings before they touch innerHTML. Quest and reward names
+    // come from Discord API fields (questName, reward name) and can carry markup; a crafted
+    // title like "><img src=x onerror=...> would otherwise inject into the dashboard DOM —
+    // the exact inline-injection Discord's CSP exists to stop.
+    const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // expiresAt is occasionally missing/malformed mid-rollout. new Date(undefined) is NaN and
+    // `NaN > now` is always false, which would silently drop the quest with no log. Treat an
+    // unparseable expiry as "not expired" so we attempt the quest instead of hiding it.
+    const notExpired = q => { const e = new Date(q.config?.expiresAt ?? 0).getTime(); return Number.isNaN(e) || e > Date.now(); };
 
     /* ── error classification ─────────────────────────────────── */
     // Traffic uses this to decide: retry, skip, or propagate.
@@ -360,9 +429,19 @@
             document.getElementById('orion-stop').onclick = () => this.shutdown();
             document.addEventListener('keydown', e => (e.key === '>' || (e.shiftKey && e.key === '.')) && this.toggle());
 
-            try { if (Notification.permission === "default") Notification.requestPermission(); } catch (e) {
-                this.log(`[Notification] Request permission failed: ${e.message}`, 'debug');
-            }
+            // gear toggles the picker options panel. Those nodes only exist during the picker
+            // phase, so look them up at click time and no-op otherwise. Registered once here
+            // (not in showQuestPicker) so a fresh listener doesn't stack every time it opens.
+            document.getElementById('orion-opts').addEventListener('click', () => {
+                const panel = document.getElementById('orion-options-panel');
+                if (!panel) return;
+                const open = panel.style.display === 'none';
+                panel.style.display = open ? '' : 'none';
+                const list = document.getElementById('orion-quest-list');
+                if (list) list.style.display = open ? 'none' : '';
+                const actions = document.querySelector('#orion-picker-form .picker-actions');
+                if (actions) actions.style.display = open ? 'none' : '';
+            });
 
             this.startTicker();
         },
@@ -457,7 +536,7 @@
                 const box = document.getElementById('orion-logs');
                 if (box && type !== 'debug') {
                     const el = document.createElement('div'); el.className = `log-item c-${type}`;
-                    el.innerHTML = `<span class="log-ts">${new Date().toLocaleTimeString().split(' ')[0]}</span> <span>${msg}</span>`;
+                    el.innerHTML = `<span class="log-ts">${new Date().toLocaleTimeString().split(' ')[0]}</span> <span>${esc(msg)}</span>`;
                     box.appendChild(el); box.scrollTop = box.scrollHeight;
                     while (box.children.length > CONFIG.MAX_LOG_ITEMS) box.firstChild.remove();
                 }
@@ -535,7 +614,7 @@
                     </div>
                     <div class="task-info">
                         <div class="task-status">${statusText}</div>
-                        <div class="task-name" title="${t.name}">${t.name}</div>
+                        <div class="task-name" title="${esc(t.name)}">${esc(t.name)}</div>
                         ${taskMetaHtml}
                     </div>
                     ${actionBtn ? `<div class="task-actions">${actionBtn}</div>` : ''}
@@ -603,10 +682,10 @@
                     <label class="quest-pick" data-rt="${q.rewardType}" data-qt="${q.type}" style="border-left-color: ${q.color};">
                         <input type="checkbox" name="quests" value="${q.id}" class="native-cb" checked>
                         <div class="task-info">
-                            <div class="task-name" title="${q.name}">${q.name}</div>
+                            <div class="task-name" title="${esc(q.name)}">${esc(q.name)}</div>
                             <div class="task-meta" style="justify-content: flex-start; gap: 8px;">
-                                <span style="text-transform: uppercase; color: var(--text-subtle);">${q.type}</span>
-                                <span style="color: ${q.color};">${q.rewardText}</span>
+                                <span style="text-transform: uppercase; color: var(--text-subtle);">${esc(q.type)}</span>
+                                <span style="color: ${q.color};">${esc(q.rewardText)}</span>
                             </div>
                         </div>
                     </label>`;
@@ -652,18 +731,6 @@
                             <button type="submit" class="quest-pick-btn start" id="start-btn">${ICONS.BOLT} <span id="start-btn-text">START (${items.length})</span></button>
                         </div>
                     </form>`;
-
-                // gear-icon click toggles the options panel. the gear lives in the
-                // header (always mounted) but the panel only exists during the picker
-                // phase. guard against null so post-picker clicks don't throw.
-                document.getElementById('orion-opts').addEventListener('click', () => {
-                    const panel = document.getElementById('orion-options-panel');
-                    if (!panel) return;
-                    const open = panel.style.display === 'none';
-                    panel.style.display = open ? '' : 'none';
-                    document.getElementById('orion-quest-list').style.display = open ? 'none' : '';
-                    form.querySelector('.picker-actions').style.display = open ? 'none' : '';
-                });
 
                 const form = document.getElementById('orion-picker-form');
                 const selectAllBtn = document.getElementById('select-all-btn');
@@ -815,6 +882,9 @@
                                 if (RUNTIME.running) {
                                     this.queue.push(req);
                                     this.process();
+                                } else {
+                                    // settle on shutdown so an awaiter doesn't hang until the task timeout
+                                    req.reject(new Error('Shutdown'));
                                 }
                             }, delay + retryJitter);
                         }
@@ -868,7 +938,7 @@
             if (this.games.some(x => x.pid === g.pid)) return;
             this.games.push(g);
             this.toggle(true);
-            this.dispatch(g, []);
+            this.dispatch([g], []);
             this.rpc(g);
         },
 
@@ -886,11 +956,13 @@
             }
         },
 
+        // callers pass arrays; don't re-wrap (a re-wrap turned [] into [[]] and emitted
+        // malformed added/removed shapes to any Flux consumer). Matches the Vencord port.
         dispatch(added, removed) {
             Mods.Dispatcher?.dispatch({
                 type: CONST.EVT.GAME,
-                added: added ? [added] : [],
-                removed: removed ? [removed] : [],
+                added,
+                removed,
                 games: Mods.RunStore.getRunningGames()
             });
         },
@@ -1104,7 +1176,10 @@
                     if (Mods.StreamStore) {
                         Mods.StreamStore.getStreamerActiveStreamMetadata = () => ({ id: gameData.id, pid, sourceName: gameData.name });
                     }
-                    cleanupHook = () => { if (Mods.StreamStore && real) Mods.StreamStore.getStreamerActiveStreamMetadata = real; };
+                    // restore unconditionally when the store exists — assigning back an
+                    // undefined `real` is the correct revert. Guarding on `real` being truthy
+                    // would leave our fake installed when the method was undefined at patch time.
+                    cleanupHook = () => { if (Mods.StreamStore) Mods.StreamStore.getStreamerActiveStreamMetadata = real; };
                 } else {
                     Patcher.add(game);
                     cleanupHook = () => Patcher.remove(game);
@@ -1167,23 +1242,25 @@
         // and TypeError on CSP/network. Probes in order: localhost relay (no mod needed
         // — see tools/orion-relay/), VencordNative plugin (CSP-free via IPC to main
         // process), DiscordNative HTTP candidates (if any exist), raw fetch.
-        _relayChecked: false,
         _relayUrl: 'http://127.0.0.1:43210',
+        _relayProbe: null,
 
-        async _probeRelay() {
-            if (this._relayChecked) return this._relayAvailable;
-            this._relayChecked = true;
-            try {
-                const r = await Promise.race([
-                    fetch(`${this._relayUrl}/health`, { method: 'GET' }),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 800))
-                ]);
-                this._relayAvailable = r.ok;
-                if (r.ok) Logger.log('[Bypass] Orion Relay detected on 127.0.0.1:43210.', 'info');
-            } catch (_) {
-                this._relayAvailable = false;
-            }
-            return this._relayAvailable;
+        // Cache the in-flight probe promise so concurrent callers (video runs at
+        // concurrency 2) all await the same result, instead of a second caller seeing
+        // a half-set flag and getting undefined (falsy) back.
+        _probeRelay() {
+            return this._relayProbe ??= (async () => {
+                try {
+                    const r = await Promise.race([
+                        fetch(`${this._relayUrl}/health`, { method: 'GET', redirect: 'error' }),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('probe timeout')), 800))
+                    ]);
+                    if (r.ok) Logger.log('[Bypass] Orion Relay detected on 127.0.0.1:43210.', 'info');
+                    return r.ok;
+                } catch (_) {
+                    return false;
+                }
+            })();
         },
 
         async _bypassPost(url, headers, jsonBody) {
@@ -1194,7 +1271,8 @@
                 const r = await fetch(`${this._relayUrl}/proxy`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ url, headers, body: jsonBody })
+                    body: JSON.stringify({ url, headers, body: jsonBody }),
+                    redirect: 'error'
                 });
                 if (!r.ok) throw { status: r.status, body: await r.text() };
                 const result = await r.json();
@@ -1257,7 +1335,9 @@
 
             // 4) Direct fetch — works on web Discord (no CSP) or relaxed clients.
             //    CSP-blocked on Discord Desktop: throws TypeError "Failed to fetch".
-            const res = await fetch(url, { method: 'POST', headers, body: jsonBody });
+            //    redirect:'error' so a 3xx from discordsays can't bounce our auth token
+            //    and proxy-ticket Referer to an arbitrary host.
+            const res = await fetch(url, { method: 'POST', headers, body: jsonBody, redirect: 'error' });
             const body = await res.text();
             if (!res.ok) throw { status: res.status, body };
             return { ok: true, status: res.status, body };
@@ -1275,16 +1355,29 @@
 
             // Snapshot the grants this app already has BEFORE we authorize, so cleanup
             // revokes only the grant we create and never one the user made themselves.
-            // If the snapshot fails we leave cleanup off rather than guess and delete the wrong grant.
-            let preGrantIds = null;
+            // The snapshot is a PRECONDITION: if it fails we abort before authorizing, so we
+            // never create a grant we can't later identify and revoke.
+            let preGrantIds;
             try {
                 const before = await Mods.API.get({ url: '/oauth2/tokens' });
                 preGrantIds = new Set((before?.body || []).filter(tk => tk.application?.id === appId).map(tk => tk.id));
             } catch (e) {
-                Logger.log(`[Bypass] Grant snapshot failed; skipping cleanup to stay safe: ${e?.message}`, 'debug');
+                Logger.log(`[Bypass] Couldn't snapshot existing grants; aborting so we never leave an un-revocable authorization: ${e?.message}`, 'warn');
+                return false;
             }
 
             try {
+                // Consent gate: never OAuth-authorize a third-party app without the user's
+                // explicit, informed OK. Resolve the app's display name for the prompt; a
+                // decline aborts before the irreversible authorize. preGrantIds is already a
+                // Set here (snapshot failure returned above), so no grant leaks on decline.
+                let appName = null;
+                try { const a = await Mods.API.get({ url: `/applications/public?application_ids=${appId}` }); appName = a?.body?.[0]?.name ?? null; } catch (_) { }
+                if (!(await Consent.ask(appId, appName))) {
+                    Logger.log(`[Bypass] Consent declined for "${t.name}". Not authorizing the app.`, 'warn');
+                    return false;
+                }
+
                 Logger.log(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`, 'info');
 
                 const authRes = await Mods.API.post({
@@ -1317,7 +1410,9 @@
                     { 'Content-Type': 'application/json', 'X-Auth-Token': '', 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
                     JSON.stringify({ code: authCode })
                 );
-                const { token: dsToken } = JSON.parse(dsAuthRes.body);
+                let dsToken;
+                try { dsToken = JSON.parse(dsAuthRes.body)?.token; }
+                catch { throw new Error('discordsays returned non-JSON: ' + String(dsAuthRes.body).slice(0, 120)); }
                 if (!dsToken) throw new Error('no discordsays token');
 
                 await Tasks._bypassPost(
@@ -1488,8 +1583,13 @@
             Sound.play('tick');
 
             try {
-                if (typeof Notification !== 'undefined' && Notification.permission === "granted") {
-                    new Notification("Orion: Quest Completed", { body: t.name, icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp", tag: `orion-${q.id}` });
+                if (typeof Notification !== 'undefined') {
+                    // ask lazily on the first completion, not on paste (a permission prompt
+                    // before the user has even picked a quest is intrusive).
+                    if (Notification.permission === 'default') { try { await Notification.requestPermission(); } catch (_) { } }
+                    if (Notification.permission === 'granted') {
+                        new Notification("Orion: Quest Completed", { body: t.name, icon: "https://cdn.discordapp.com/emojis/1120042457007792168.webp", tag: `orion-${q.id}` });
+                    }
                 }
             } catch (e) { Logger.log(`[Notification] ${e.message}`, 'debug'); }
 
@@ -1732,7 +1832,7 @@
 
         let quests = getQuests().filter(q =>
             !q.userStatus?.completedAt
-            && new Date(q.config?.expiresAt).getTime() > Date.now()
+            && notExpired(q)
             && q.id !== CONST.ID
             && !Tasks.skipped.has(q.id)
         );
@@ -1767,7 +1867,7 @@
                 const active = quests.filter(q =>
                     pickerResult.selectedQuests.has(q.id)
                     && !q.userStatus?.completedAt
-                    && new Date(q.config?.expiresAt).getTime() > Date.now()
+                    && notExpired(q)
                     && q.id !== CONST.ID
                     && !Tasks.skipped.has(q.id)
                 );

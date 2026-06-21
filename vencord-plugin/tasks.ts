@@ -15,6 +15,7 @@ import type { PluginNative } from "@utils/types";
 
 import type { Patcher } from "./patcher";
 import type { Traffic } from "./traffic";
+import { settings } from "./settings";
 import { isSkippableQuest } from "./traffic";
 import type { DetectedTask, FakeGame, OrionRuntime, Quest, Stores, TaskInfo, TaskType } from "./types";
 import { rnd, sanitize, sleep } from "./util";
@@ -301,6 +302,13 @@ export class TaskRunner {
     async bypassAchievement(q: Quest, t: TaskInfo): Promise<boolean> {
         const appId = q.config?.application?.id;
         if (!appId) return false;
+        // Consent gate: the OAuth bypass authorizes a third-party app on the user's account.
+        // It only runs when the user explicitly enabled it in settings (default off). The toggle
+        // is the informed-consent gate and covers the non-interactive /orion start + Auto-Start paths.
+        if (!settings.store.achievementBypass) {
+            logger.info(`[Bypass] Achievement OAuth bypass is off in settings; skipping "${t.name}". Enable it in OrionQuests settings if you want it.`);
+            return false;
+        }
         // appId is interpolated straight into discordsays URLs. Refuse anything
         // non-numeric so a malformed/hostile id can't redirect the request elsewhere.
         if (!/^\d+$/.test(String(appId))) {
@@ -310,12 +318,15 @@ export class TaskRunner {
 
         // Snapshot the grants this app already has BEFORE we authorize, so cleanup
         // revokes only the grant we create and never one the user made themselves.
-        let preGrantIds: Set<string> | null = null;
+        // The snapshot is a precondition: if it fails we abort before authorizing, so we
+        // never create a grant we can't later identify and revoke.
+        let preGrantIds: Set<string> | undefined;
         try {
             const before: any = await this.stores.API.get({ url: "/oauth2/tokens" });
             preGrantIds = new Set((before?.body || []).filter((tk: any) => tk.application?.id === appId).map((tk: any) => tk.id));
         } catch (e: any) {
-            logger.debug(`[Bypass] Grant snapshot failed; skipping cleanup to stay safe: ${e?.message}`);
+            logger.warn(`[Bypass] Couldn't snapshot existing grants; aborting so we never leave an un-revocable authorization: ${e?.message}`);
+            return false;
         }
 
         try {
@@ -349,7 +360,9 @@ export class TaskRunner {
             // CSP-exempt main-process fetch via the native module
             const dsAuthRes = await Native.discordsaysAuthorize({ appId, questId: q.id, authCode, referrer });
             if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
-            const { token: dsToken } = JSON.parse(dsAuthRes.body) as { token?: string };
+            let dsToken: string | undefined;
+            try { dsToken = (JSON.parse(dsAuthRes.body) as { token?: string }).token; }
+            catch { throw new Error("discordsays returned non-JSON: " + String(dsAuthRes.body).slice(0, 120)); }
             if (!dsToken) throw new Error("no discordsays token");
 
             const progRes = await Native.discordsaysProgress({ appId, questId: q.id, token: dsToken, target: t.target, referrer });
