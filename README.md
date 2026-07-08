@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.9.4
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9.5
 
-[![Version](https://img.shields.io/badge/v4.9.4-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9.5-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -198,6 +198,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9.5
+- **Fix: the Vencord installer bundle no longer breaks Vencord's updater** &mdash; The bundle was shipping a build compiled in git-updater mode (`Standalone: false`) into `%APPDATA%\Vencord`, which has no git repo, so Vencord threw `not a git repository` every launch and showed "can't check for updates" ([#39](https://github.com/nyxxbit/discord-quest-completer/issues/39)). The plugin was never the cause; it was the build flags. The bundle is now built `--standalone --disable-updater`, which turns the updater off cleanly (no error, and no risk of the standalone HTTP updater silently reverting the dist to vanilla and deleting the plugin). Honest tradeoff, now documented: Vencord is frozen at the bundled version; to get updates back, reinstall official Vencord and re-run the installer. `INSTALL.cmd` now backs up your existing Vencord build to `dist.orion-backup` first so it's undoable. Userscript and plugin source are unchanged this release; only the installer bundle differs. Root cause was pinned by a senior review panel that read the Vencord updater internals.
 
 ### v4.9.4
 - **Deeper security pass on the ACHIEVEMENT bypass** &mdash; A multi-angle audit following [#38](https://github.com/nyxxbit/discord-quest-completer/issues/38) surfaced more to address. The bypass now requires **explicit consent before authorizing any app**: the userscript shows a popup with the app name, the OAuth scopes, and a note that it revokes right after (defaults to decline, so an idle prompt never authorizes); the Vencord plugin gates it behind an off-by-default setting. A failed grant snapshot now **aborts before authorizing** instead of authorizing without a way to revoke. `redirect: "error"` on every `discordsays.com` fetch (userscript and native module) so a 3xx can't bounce the auth token to another host. The native module validates the `questId` and `Referer`, not only the `appId`. The relay reflects CORS only to Discord origins, drops non-allowlisted headers, caps the body size, and checks the `Host`. **Also fixed a stored-DOM-injection bug** &mdash; a crafted quest or reward name could inject markup into the dashboard; all server-controlled strings are now escaped. Plus assorted hardening: guarded JSON parsing of activity responses, NaN-safe quest expiry, and listener/audio/shutdown leak fixes. `docs/ARCHITECTURE.md` rewritten to match the current engine.

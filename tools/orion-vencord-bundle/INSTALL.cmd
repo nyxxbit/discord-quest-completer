@@ -28,8 +28,11 @@ taskkill /F /IM Discord.exe >nul 2>&1
 taskkill /F /IM DiscordSystemHelper.exe >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 
-:: 3) Copy the files
+:: 3) Back up the current Vencord build once (so this is undoable), then copy ours in
 echo  [2/4] Copying files into Vencord...
+if not exist "%APPDATA%\Vencord\dist.orion-backup\" (
+    xcopy /Y /Q /E /I "%APPDATA%\Vencord\dist" "%APPDATA%\Vencord\dist.orion-backup" >nul
+)
 xcopy /Y /Q "dist\*" "%APPDATA%\Vencord\dist\" >nul
 if errorlevel 1 (
     color 0C

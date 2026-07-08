@@ -74,6 +74,33 @@ detailed log if you want to follow along.
   The official Vencord installer overwrote our files.
   Just run INSTALL.cmd again.
 
+"Vencord says it can't check for updates / won't update"
+  That's expected. This bundle ships a build with the auto-updater
+  turned off, so Vencord stays frozen on the bundled version and
+  won't try (and fail) to update itself. It is NOT broken. See
+  "UPDATING AND UNDOING" below if you want updates back.
+
+
+==============================================================
+              UPDATING AND UNDOING
+==============================================================
+
+This bundle installs a Vencord build with auto-update turned OFF,
+so your Vencord stays frozen on the version that shipped here. That
+is intentional: it is what stops the "can't check for updates" error
+you would otherwise get. The tradeoff is Vencord won't self-update
+while this is installed.
+
+To update Vencord (this removes the plugin, then re-adds it):
+  1. Reinstall the official Vencord from https://vencord.dev/download
+     (this restores a normal, self-updating Vencord)
+  2. Run INSTALL.cmd again to put the plugin back
+
+To fully undo and get a clean, updatable Vencord back:
+  - Run the official Vencord installer and pick "Repair", OR
+  - Restore the "dist.orion-backup" folder that INSTALL.cmd saved
+    inside %APPDATA%\Vencord (copy it back over "dist")
+
 
 ==============================================================
                   IMPORTANT WARNINGS
