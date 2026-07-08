@@ -39,7 +39,16 @@ The relay is a 100-line PowerShell script. PowerShell 7+ runs on Linux/macOS &md
 pwsh ./orion-relay.ps1
 ```
 
-If you'd rather not run PowerShell, port the script to Python or Node &mdash; the wire protocol below is trivial.
+If you'd rather not install PowerShell, use the bundled Python port. It needs
+only the Python 3 standard library &mdash; no `pip install`:
+
+```sh
+python3 ./orion-relay.py
+```
+
+Same wire protocol, same security posture (loopback-only bind, host allowlist,
+path allowlist, header allowlist, no redirect following, 64 KB body cap). Prefer
+Node? The wire protocol below is trivial to reimplement.
 
 ## Wire protocol
 
