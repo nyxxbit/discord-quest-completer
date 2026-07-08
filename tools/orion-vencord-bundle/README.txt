@@ -101,6 +101,11 @@ To fully undo and get a clean, updatable Vencord back:
   - Restore the "dist.orion-backup" folder that INSTALL.cmd saved
     inside %APPDATA%\Vencord (copy it back over "dist")
 
+Want Vencord to KEEP auto-updating instead of freezing? Use the
+"auto-update edition" (orion-devbuild-installer) from the same release.
+It's heavier (builds Vencord from source, a few hundred MB) but the
+plugin rides along through every Vencord update.
+
 
 ==============================================================
                   IMPORTANT WARNINGS

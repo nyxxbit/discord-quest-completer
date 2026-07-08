@@ -7,3 +7,5 @@ debug-modules.js
 tools/orion-vencord-bundle/dist/
 tools/orion-vencord-bundle-v*.zip
 tools/orion-relay-v*.zip
+tools/orion-devbuild-installer/plugin/
+tools/orion-devbuild-installer-v*.zip
