@@ -6,7 +6,7 @@ Discord's renderer CSP allows connect-src to http://127.0.0.1:* but blocks
 from the userscript to the activity backend, bypassing CSP without requiring
 Vencord / BetterDiscord / any client mod.
 
-Run:  python3 orion_relay.py    (Ctrl+C to stop)
+Run:  python3 orion-relay.py    (Ctrl+C to stop)
 
 Python port of orion-relay.ps1 — same wire protocol, same security posture.
 """
