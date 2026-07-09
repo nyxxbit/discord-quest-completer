@@ -16,13 +16,9 @@ Get-Process Discord, DiscordCanary, DiscordPTB, DiscordSystemHelper, Update -Err
 $deadline = (Get-Date).AddSeconds(15)
 while (((Get-Process Discord, DiscordCanary, DiscordPTB -ErrorAction SilentlyContinue) | Measure-Object).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
 
-# 2. best-effort proper uninject via the clone (may no-op if the clone is gone or the CLI fails)
-if (Test-Path (Join-Path $InstallDir 'package.json')) {
-    $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
-    Push-Location $InstallDir
-    try { corepack pnpm run uninject 2>&1 | Out-Null } catch {}
-    Pop-Location
-}
+# 2. (No pnpm/CLI uninject step on purpose: Vencord's installer CLI is interactive and would stall
+#     on a friend's console waiting for arrow-key input, and all it does is restore app.asar - which
+#     the clone-independent step below does directly, without needing Node or the clone to survive.)
 
 # 3. clone-independent restore: for every Discord flavor, if app.asar is a small stub that
 #    points at OUR OrionVencord install and a real _app.asar sits beside it, restore it.

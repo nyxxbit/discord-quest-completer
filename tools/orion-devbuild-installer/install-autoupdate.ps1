@@ -156,11 +156,17 @@ try {
         Warn "[6/6] -SkipInject set: not patching Discord. Build is ready at $InstallDir\dist."
     } else {
         Info "[6/6] Patching Discord..."
-        Write-Host "  Windows may show a blue 'Windows protected your PC' box - click 'More info'" -ForegroundColor Yellow
+        Write-Host "  Windows may show a blue 'Windows protected your PC' box - if so, click 'More info'" -ForegroundColor Yellow
         Write-Host "  then 'Run anyway'. It's Vencord's own installer, freshly downloaded from GitHub." -ForegroundColor Yellow
+        # Patch the detected Discord explicitly (-branch) so Vencord's CLI never drops into its
+        # interactive "Select Discord install to patch" arrow-key menu. Left interactive it stalls a
+        # headless/logged run and makes a non-technical friend guess at a TUI with no instructions.
+        $flavor = DiscordFlavor
+        if (-not $flavor) { Fail "No Discord install found to patch. Install Discord first, then re-run." }
+        $branch = switch ($flavor) { 'DiscordCanary' { 'canary' } 'DiscordPTB' { 'ptb' } default { 'stable' } }
         KillDiscord
         $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-        corepack pnpm run inject
+        node scripts\runInstaller.mjs -- --install -branch $branch
         $injectCode = $LASTEXITCODE
         $ErrorActionPreference = $prev
 
@@ -177,7 +183,7 @@ try {
         if ($injectCode -ne 0 -or -not $patched) {
             Warn "  Inject didn't verify - reverting so Discord isn't left half-patched..."
             $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-            corepack pnpm run uninject 2>&1 | Out-Null
+            node scripts\runInstaller.mjs -- --uninstall -branch $branch 2>&1 | Out-Null
             $ErrorActionPreference = $prev
             # If uninject no-ops too, restore the real asar directly so Discord at least boots vanilla.
             if ($asar -and (Test-Path (Join-Path $asar.Directory.FullName '_app.asar'))) {
@@ -187,7 +193,6 @@ try {
             Fail "patching Discord failed. Discord was restored to its original state - just reopen it."
         }
         Good "  Discord patched (verified)."
-        $flavor = DiscordFlavor
         if ($flavor) {
             Start-Process (Join-Path $env:LOCALAPPDATA "$flavor\Update.exe") -ArgumentList '--processStart', "$flavor.exe" -ErrorAction SilentlyContinue
         } else {
