@@ -482,7 +482,7 @@
         // lands every ~30s. Free-running there invented a moving bar even when Discord was
         // reporting nothing at all — it reached 100% while the quest sat at 0% in Discord's
         // own UI (issue #43). So they extrapolate strictly from the last heartbeat: the bar
-        // is smooth while beats arrive, and frozen at 0 when none ever do.
+        // is smooth while beats arrive, and frozen at the last known value when they stop.
         // ACHIEVEMENT is a milestone count, not seconds — never ticked.
         SERVER_DRIVEN: ["GAME", "STREAM"],
 
@@ -1052,9 +1052,10 @@
     const Tasks = {
         skipped: new Set(),  // quest IDs that returned 4xx — no point retrying
 
-        // userStatus.progress arrives as a plain object over REST, but the client transforms
-        // dispatched payloads and newer builds hand back a Map. Indexing a Map with [] yields
-        // undefined, which silently read as "no progress" (issue #43).
+        // userStatus.progress is a plain object over REST, but dispatched payloads go through
+        // the client's own transform first, so the shape isn't ours to assume. Defensive: if
+        // it ever arrives as a Map, indexing with [] would read undefined and silently look
+        // like "no progress".
         readProgress(userStatus, key) {
             const p = userStatus?.progress;
             const entry = p instanceof Map ? p.get(key) : p?.[key];
@@ -1224,9 +1225,10 @@
         // shared path for GAME/STREAM — injects fake process, subscribes to heartbeat events
         async generic(q, t, type, fallbackKey, s) {
             if (!RUNTIME.running) return;
-            // Prefer the key detected from the quest config: newer quests use versioned task
-            // names (PLAY_ON_DESKTOP_V2), and reading the legacy name off those returns
-            // undefined, which pins progress at 0 until the safety timer kills the task.
+            // Prefer the key detected from the quest config. detectType matches task keys by
+            // substring, so a renamed variant (a PLAY_ON_DESKTOP_V2, say) still resolves —
+            // but reading progress under a hardcoded legacy name would return undefined and
+            // pin the task at 0 until the safety timer kills it.
             const key = t.keyName || fallbackKey;
             const gameData = await this.fetchGameData(t.appId, t.name);
 
