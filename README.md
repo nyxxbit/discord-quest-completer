@@ -2,9 +2,9 @@
 
 # Orion
 
-**Auto-complete every Discord Quest in seconds** &mdash; v4.9.5
+**Auto-complete every Discord Quest in seconds** &mdash; v4.9.6
 
-[![Version](https://img.shields.io/badge/v4.9.5-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
+[![Version](https://img.shields.io/badge/v4.9.6-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://github.com/nyxxbit/discord-quest-completer)
 [![Stars](https://img.shields.io/github/stars/nyxxbit/discord-quest-completer?style=for-the-badge&color=faa61a)](https://github.com/nyxxbit/discord-quest-completer/stargazers)
 [![License](https://img.shields.io/badge/MIT-green?style=for-the-badge)](LICENSE)
 
@@ -198,6 +198,9 @@ Contributions are welcome &mdash; bug reports, PRs, and docs. Start with [`CONTR
 ---
 
 ## Changelog
+
+### v4.9.6
+- **Fix: game quests never progressed on Discord Canary** &mdash; Canary's `taskConfigV2` moved the application off the quest config and onto each task (`tasks.PLAY_ON_DESKTOP.applications[0].id`); `config.application.id` no longer exists, so every game/stream quest fell through to a `?? 0` fallback and injected a process claiming to be application `0`. Discord could never match that to the quest, so it never sent a single heartbeat and the quest sat at 0% ([#43](https://github.com/nyxxbit/discord-quest-completer/issues/43)). Canary also derives quest eligibility from `getVisibleGame` / `getVisibleRunningGames` / `getRunningDiscordApplicationIds` / `getCandidateGames`, which the old patch left empty &mdash; all four are now patched when present and restored on cleanup. Two things had been hiding the failure: the dashboard ticker incremented progress locally every second regardless of heartbeats, so a quest earning nothing still showed a bar climbing to 100%, and nothing failed until the 25-minute timer. The ticker now extrapolates only from the last real heartbeat, so it can't run past what Discord reported, and a game/stream task with no heartbeat inside 90s aborts with a clear message. Progress also reads the task key detected from the config instead of a hardcoded `PLAY_ON_DESKTOP` (so `PLAY_ON_DESKTOP_V2` resolves) and seeds from the server's stored value on start. Stable is unaffected: the legacy config path remains as a fallback.
 
 ### v4.9.5
 - **Fix: the Vencord installer bundle no longer breaks Vencord's updater** &mdash; The bundle was shipping a build compiled in git-updater mode (`Standalone: false`) into `%APPDATA%\Vencord`, which has no git repo, so Vencord threw `not a git repository` every launch and showed "can't check for updates" ([#39](https://github.com/nyxxbit/discord-quest-completer/issues/39)). The plugin was never the cause; it was the build flags. The bundle is now built `--standalone --disable-updater`, which turns the updater off cleanly (no error, and no risk of the standalone HTTP updater silently reverting the dist to vanilla and deleting the plugin). Honest tradeoff, now documented: Vencord is frozen at the bundled version; to get updates back, reinstall official Vencord and re-run the installer. `INSTALL.cmd` now backs up your existing Vencord build to `dist.orion-backup` first so it's undoable. Userscript and plugin source are unchanged this release; only the installer bundle differs. Root cause was pinned by a senior review panel that read the Vencord updater internals.

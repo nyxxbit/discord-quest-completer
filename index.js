@@ -5,7 +5,7 @@
 
     const CONFIG = {
         NAME: "Orion",
-        VERSION: "v4.9.5",
+        VERSION: "v4.9.6",
         THEME: "#5865F2",             // discord blurple
         SUCCESS: "#3BA55C",
         WARN: "#faa61a",
@@ -18,6 +18,7 @@
 
     const SYS = Object.freeze({
         MAX_TIME: 25 * 60 * 1000,       // hard abort per task (25 min)
+        HEARTBEAT_GRACE: 90 * 1000,     // GAME/STREAM: give up if Discord sends no heartbeat
         MAX_TASK_FAILURES: 5,           // consecutive network failures
         MAX_RETRIES: 3,                 // 429/5xx transient error retries
         IS_DESKTOP: typeof window.DiscordNative !== 'undefined'
@@ -475,15 +476,31 @@
             return Math.min(100, (t.cur / t.max) * 100);
         },
 
+        // Cosmetic smoothing between real progress updates. VIDEO and ACTIVITY compute their
+        // own progress locally, so free-running +1/s matches reality closely enough.
+        // GAME/STREAM don't: their only source of truth is Discord's heartbeat reply, which
+        // lands every ~30s. Free-running there invented a moving bar even when Discord was
+        // reporting nothing at all — it reached 100% while the quest sat at 0% in Discord's
+        // own UI (issue #43). So they extrapolate strictly from the last heartbeat: the bar
+        // is smooth while beats arrive, and frozen at 0 when none ever do.
+        // ACHIEVEMENT is a milestone count, not seconds — never ticked.
+        SERVER_DRIVEN: ["GAME", "STREAM"],
+
         startTicker() {
             if (this.tickerId) clearInterval(this.tickerId);
             this.tickerId = setInterval(() => {
                 if (!RUNTIME.running) return clearInterval(this.tickerId);
                 for (const [id, task] of this.tasks.entries()) {
-                    if (task.status === "RUNNING" && task.type !== "ACHIEVEMENT") {
-                        let cur = Math.min(task.cur + 1, task.max);
-                        this.updateTask(id, { cur });
+                    if (task.status !== "RUNNING" || task.type === "ACHIEVEMENT") continue;
+
+                    let cur;
+                    if (this.SERVER_DRIVEN.includes(task.type)) {
+                        if (task.serverAt == null) continue;  // no heartbeat yet — show nothing
+                        cur = Math.min(task.serverCur + (Date.now() - task.serverAt) / 1000, task.max);
+                    } else {
+                        cur = Math.min(task.cur + 1, task.max);
                     }
+                    this.updateTask(id, { cur });
                 }
             }, 1000);
         },
@@ -912,24 +929,50 @@
     let Mods = {};  // populated by loadModules() — holds Discord webpack internals
 
     const Patcher = {
-        games: [], realGames: null, realPID: null, active: false,
+        games: [], real: {}, active: false,
+
+        // Overriding getRunningGames alone is no longer enough. Canary derives quest
+        // eligibility from the "visible"/"candidate" views, and a game absent from those
+        // never gets a heartbeat scheduled — the quest sits at 0% forever (issue #43).
+        // Older builds don't expose all of these, so each is patched only if present.
+        PATCHED: ['getRunningGames', 'getGameForPID', 'getVisibleGame', 'getVisibleRunningGames',
+                  'getRunningDiscordApplicationIds', 'getCandidateGames'],
 
         // stash originals so we can restore them on cleanup
         init(Store) {
             if (!Store) return;
-            this.realGames = Store.getRunningGames;
-            this.realPID = Store.getGameForPID;
+            this.real = {};
+            for (const name of this.PATCHED) {
+                if (typeof Store[name] === 'function') this.real[name] = Store[name];
+            }
+            const absent = this.PATCHED.filter(n => !this.real[n]);
+            if (absent.length) Logger.log(`[Patcher] Store lacks ${absent.join(', ')} — not patching those.`, 'debug');
         },
 
         // swap between real and patched store methods
         toggle(on) {
+            const S = Mods.RunStore;
+            const real = this.real;
+
             if (on && !this.active) {
-                Mods.RunStore.getRunningGames = () => [...this.realGames.call(Mods.RunStore), ...this.games];
-                Mods.RunStore.getGameForPID = (pid) => this.games.find(g => g.pid === pid) || this.realPID.call(Mods.RunStore, pid);
+                S.getRunningGames = () => [...real.getRunningGames.call(S), ...this.games];
+                S.getGameForPID = (pid) => this.games.find(g => g.pid === pid) || real.getGameForPID.call(S, pid);
+
+                // our game wins as "the" visible one — that's the whole point of the spoof
+                if (real.getVisibleGame) S.getVisibleGame = () => this.games[0] ?? real.getVisibleGame.call(S);
+                if (real.getVisibleRunningGames) S.getVisibleRunningGames = () => [...real.getVisibleRunningGames.call(S), ...this.games];
+                if (real.getCandidateGames) S.getCandidateGames = () => [...real.getCandidateGames.call(S), ...this.games];
+                if (real.getRunningDiscordApplicationIds) {
+                    S.getRunningDiscordApplicationIds = () => {
+                        const ids = real.getRunningDiscordApplicationIds.call(S);
+                        const ours = this.games.map(g => String(g.id));
+                        // shape varies by build — preserve whichever collection came back
+                        return ids instanceof Set ? new Set([...ids, ...ours]) : [...(ids ?? []), ...ours];
+                    };
+                }
                 this.active = true;
             } else if (!on && this.active) {
-                Mods.RunStore.getRunningGames = this.realGames;
-                Mods.RunStore.getGameForPID = this.realPID;
+                for (const [name, fn] of Object.entries(real)) S[name] = fn;
                 this.active = false;
             }
         },
@@ -1009,7 +1052,24 @@
     const Tasks = {
         skipped: new Set(),  // quest IDs that returned 4xx — no point retrying
 
+        // userStatus.progress arrives as a plain object over REST, but the client transforms
+        // dispatched payloads and newer builds hand back a Map. Indexing a Map with [] yields
+        // undefined, which silently read as "no progress" (issue #43).
+        readProgress(userStatus, key) {
+            const p = userStatus?.progress;
+            const entry = p instanceof Map ? p.get(key) : p?.[key];
+            return entry?.value ?? userStatus?.streamProgressSeconds ?? 0;
+        },
+
         sanitize(name) { return name.replace(/[^a-zA-Z0-9 ]/g, "").trim().replace(/\s+/g, " "); },
+
+        // Newer quest configs (taskConfigV2) carry the app per task as
+        // tasks[key].applications[]; older ones had a single config.application.id.
+        // A GAME quest built with the wrong id produces a fake process Discord can't
+        // match to the quest, so it never schedules a heartbeat (issue #43).
+        appIdFor(cfg, keyName, legacyAppId) {
+            return cfg?.tasks?.[keyName]?.applications?.[0]?.id ?? legacyAppId ?? null;
+        },
 
         // match task keys from quest config to our handler types
         // order matters — ACHIEVEMENT_IN_ACTIVITY must match before generic ACTIVITY
@@ -1025,11 +1085,21 @@
 
             for (const { key, type } of typeMap) {
                 const keyName = taskKeys.find(k => k.includes(key));
-                if (keyName) return { type, keyName, target: cfg.tasks[keyName]?.target ?? 0 };
+                if (keyName) {
+                    return {
+                        type, keyName,
+                        target: cfg.tasks[keyName]?.target ?? 0,
+                        appId: this.appIdFor(cfg, keyName, applicationId)
+                    };
+                }
             }
 
             if (applicationId) {
-                return { type: "GAME", keyName: "PLAY_ON_DESKTOP", target: cfg.tasks[taskKeys[0]]?.target ?? 0 };
+                return {
+                    type: "GAME", keyName: "PLAY_ON_DESKTOP",
+                    target: cfg.tasks[taskKeys[0]]?.target ?? 0,
+                    appId: applicationId
+                };
             }
 
             return null;
@@ -1152,8 +1222,12 @@
         STREAM(q, t, s) { return Tasks.generic(q, t, "STREAM", "STREAM_ON_DESKTOP", s); },
 
         // shared path for GAME/STREAM — injects fake process, subscribes to heartbeat events
-        async generic(q, t, type, key, s) {
+        async generic(q, t, type, fallbackKey, s) {
             if (!RUNTIME.running) return;
+            // Prefer the key detected from the quest config: newer quests use versioned task
+            // names (PLAY_ON_DESKTOP_V2), and reading the legacy name off those returns
+            // undefined, which pins progress at 0 until the safety timer kills the task.
+            const key = t.keyName || fallbackKey;
             const gameData = await this.fetchGameData(t.appId, t.name);
 
             return new Promise(resolve => {
@@ -1170,6 +1244,8 @@
                 let cleanupHook;
                 let cleaned = false;
                 let safetyTimer;
+                let watchdogTimer;
+                let beats = 0;
 
                 if (type === "STREAM") {
                     const real = Mods.StreamStore?.getStreamerActiveStreamMetadata;
@@ -1185,13 +1261,18 @@
                     cleanupHook = () => Patcher.remove(game);
                 }
 
-                Logger.updateTask(q.id, { name: t.name, type, cur: 0, max: t.target, status: "RUNNING" });
+                // Seed from progress the server already holds. Painting 0 here made a resumed
+                // quest look like it had restarted from scratch until the next heartbeat
+                // (~30s later) corrected it.
+                const seeded = Tasks.readProgress(s, key);
+                Logger.updateTask(q.id, { name: t.name, type, cur: seeded, max: t.target, status: "RUNNING" });
                 Logger.log(`[Task] Started ${type}: ${gameData.name}`, 'info');
 
                 const finish = () => {
                     if (cleaned) return;
                     cleaned = true;
                     clearTimeout(safetyTimer);
+                    clearTimeout(watchdogTimer);
                     try { cleanupHook(); } catch (e) { Logger.log(`[Task] Cleanup: ${e.message}`, 'debug'); }
                     try { Mods.Dispatcher?.unsubscribe(CONST.EVT.HEARTBEAT, check); } catch (e) {
                         Logger.log(`[Dispatcher] Unsubscribe failed: ${e.message}`, 'debug');
@@ -1205,12 +1286,30 @@
                     resolve();
                 }, SYS.MAX_TIME);
 
+                // Discord drives these quests: it sends /quests/{id}/heartbeat itself while it
+                // believes the game runs, and we only read the replies. If it never accepts the
+                // injected process, no heartbeat ever arrives and the task would sit "RUNNING"
+                // for the full 25 minutes with nothing happening. Give up after 90s (3 missed
+                // beats at the usual ~30s cadence) and say why.
+                watchdogTimer = setTimeout(() => {
+                    if (beats > 0 || cleaned || !RUNTIME.running) return;
+                    Logger.log(`[Task] Discord never reported progress for "${t.name}" — it isn't accepting the injected process on this client. Nothing to wait for.`, 'err');
+                    Tasks.failTask(q, t, 'No heartbeat from Discord');
+                    finish();
+                    resolve();
+                }, SYS.HEARTBEAT_GRACE);
+
                 const check = (d) => {
                     if (!RUNTIME.running) { finish(); resolve(); return; }
                     if (d?.questId !== q.id) return;
 
-                    const prog = d.userStatus?.progress?.[key]?.value ?? d.userStatus?.streamProgressSeconds ?? 0;
-                    Logger.updateTask(q.id, { name: t.name, type, cur: prog, max: t.target, status: "RUNNING" });
+                    beats++;
+                    const prog = Tasks.readProgress(d.userStatus, key);
+                    // anchor for the ticker: it extrapolates from here until the next beat
+                    Logger.updateTask(q.id, {
+                        name: t.name, type, cur: prog, max: t.target, status: "RUNNING",
+                        serverCur: prog, serverAt: Date.now()
+                    });
 
                     if (prog >= t.target) {
                         finish();
@@ -1895,15 +1994,24 @@
                             return;
                         }
 
-                        const { type, keyName, target } = typeData;
+                        const { type, keyName, target, appId } = typeData;
                         if (target <= 0) {
                             Logger.log(`[Quest] Invalid target (${target}) for ${q.id}. Skipping.`, 'warn');
                             return;
                         }
 
+                        // GAME/STREAM impersonate a specific application. Without a real id the
+                        // fake process is unidentifiable and Discord silently never counts it —
+                        // skip loudly instead of running a task that can't finish (issue #43).
+                        if ((type === 'GAME' || type === 'STREAM') && !appId) {
+                            Logger.log(`[Quest] "${q.config?.messages?.questName ?? q.id}" has no application id in its config — can't spoof the game. Skipping.`, 'warn');
+                            Tasks.skipped.add(q.id);
+                            return;
+                        }
+
                         const tInfo = {
                             id: q.id,
-                            appId: q.config?.application?.id ?? 0,
+                            appId: appId ?? 0,
                             name: q.config?.messages?.questName ?? "Unknown Quest",
                             target,
                             type,

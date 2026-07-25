@@ -221,14 +221,22 @@ async function mainLoop(): Promise<void> {
                         logger.warn(`[Quest] "${q.config?.messages?.questName ?? q.id}" requires desktop app. Skipping.`);
                         continue;
                     }
-                    const { type, keyName, target } = detected;
+                    const { type, keyName, target, appId } = detected;
                     if (target <= 0) {
                         logger.warn(`[Quest] Invalid target (${target}) for ${q.id}. Skipping.`);
                         continue;
                     }
+                    // GAME/STREAM impersonate a specific application. Without a real id the fake
+                    // process is unidentifiable and Discord silently never counts it — skip loudly
+                    // instead of running a task that can't finish (issue #43).
+                    if ((type === "GAME" || type === "STREAM") && !appId) {
+                        logger.warn(`[Quest] "${q.config?.messages?.questName ?? q.id}" has no application id in its config — can't spoof the game. Skipping.`);
+                        RUNTIME.skipped.add(q.id);
+                        continue;
+                    }
                     const t: TaskInfo = {
                         id: q.id,
-                        appId: q.config?.application?.id ?? 0,
+                        appId: appId ?? 0,
                         name: q.config?.messages?.questName ?? "Unknown Quest",
                         target, type, keyName,
                     };

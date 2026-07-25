@@ -27,7 +27,8 @@ export interface Quest {
 }
 
 export interface TaskConfig {
-    tasks: Record<string, { target?: number; }>;
+    // taskConfigV2 moved the application off the quest config and onto each task
+    tasks: Record<string, { target?: number; applications?: Array<{ id?: string; }>; }>;
 }
 
 export type TaskType = "GAME" | "STREAM" | "WATCH_VIDEO" | "ACTIVITY" | "ACHIEVEMENT";
@@ -36,6 +37,8 @@ export interface DetectedTask {
     type: TaskType;
     keyName: string;
     target: number;
+    /** From tasks[key].applications[0].id (taskConfigV2) or the legacy config.application.id. */
+    appId: string | null;
 }
 
 export interface TaskInfo {

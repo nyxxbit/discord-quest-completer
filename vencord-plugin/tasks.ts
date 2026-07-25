@@ -29,6 +29,7 @@ const Native = VencordNative.pluginHelpers.OrionQuests as PluginNative<typeof im
 
 const HEARTBEAT_EVT = "QUESTS_SEND_HEARTBEAT_SUCCESS";
 const MAX_TIME = 25 * 60 * 1000; // 25 minutes per task
+const HEARTBEAT_GRACE = 90 * 1000; // GAME/STREAM: give up if Discord sends no heartbeat
 const MAX_TASK_FAILURES = 5;
 
 // blacklisted quest known to break enrollment
@@ -55,6 +56,27 @@ export class TaskRunner {
         this.cb = cb;
     }
 
+    /**
+     * Newer quest configs (taskConfigV2) carry the app per task as tasks[key].applications[];
+     * older ones had a single config.application.id. A GAME quest built with the wrong id
+     * produces a fake process Discord can't match to the quest, so it never schedules a
+     * heartbeat (issue #43).
+     */
+    appIdFor(cfg: any, keyName: string, legacyAppId?: string): string | null {
+        return cfg?.tasks?.[keyName]?.applications?.[0]?.id ?? legacyAppId ?? null;
+    }
+
+    /**
+     * userStatus.progress arrives as a plain object over REST, but the client transforms
+     * dispatched payloads and newer builds hand back a Map. Indexing a Map with [] yields
+     * undefined, which silently read as "no progress" (issue #43).
+     */
+    readProgress(userStatus: any, key: string): number {
+        const p = userStatus?.progress;
+        const entry = p instanceof Map ? p.get(key) : p?.[key];
+        return entry?.value ?? userStatus?.streamProgressSeconds ?? 0;
+    }
+
     /** Detect task type from quest config. Order matters — ACHIEVEMENT_IN_ACTIVITY before generic ACTIVITY. */
     detectType(cfg: any, applicationId?: string): DetectedTask | null {
         const taskKeys = Object.keys(cfg.tasks);
@@ -67,10 +89,20 @@ export class TaskRunner {
         ];
         for (const { key, type } of typeMap) {
             const keyName = taskKeys.find(k => k.includes(key));
-            if (keyName) return { type, keyName, target: cfg.tasks[keyName]?.target ?? 0 };
+            if (keyName) {
+                return {
+                    type, keyName,
+                    target: cfg.tasks[keyName]?.target ?? 0,
+                    appId: this.appIdFor(cfg, keyName, applicationId),
+                };
+            }
         }
         if (applicationId) {
-            return { type: "GAME", keyName: "PLAY_ON_DESKTOP", target: cfg.tasks[taskKeys[0]]?.target ?? 0 };
+            return {
+                type: "GAME", keyName: "PLAY_ON_DESKTOP",
+                target: cfg.tasks[taskKeys[0]]?.target ?? 0,
+                appId: applicationId,
+            };
         }
         return null;
     }
@@ -174,8 +206,12 @@ export class TaskRunner {
     }
 
     /** GAME / STREAM share an injection path: fake process + heartbeat subscription. */
-    async generic(q: Quest, t: TaskInfo, type: TaskType, key: string): Promise<void> {
+    async generic(q: Quest, t: TaskInfo, type: TaskType, fallbackKey: string): Promise<void> {
         if (!this.runtime.running) return;
+        // Prefer the key detected from the quest config: newer quests use versioned task
+        // names (PLAY_ON_DESKTOP_V2), and reading the legacy name off those returns
+        // undefined, which pins progress at 0 until the safety timer kills the task.
+        const key = t.keyName || fallbackKey;
         const gameData = await this.fetchGameData(t.appId, t.name);
 
         return new Promise<void>(resolve => {
@@ -199,6 +235,8 @@ export class TaskRunner {
             let cleanupHook: () => void;
             let cleaned = false;
             let safetyTimer: number | undefined;
+            let watchdogTimer: number | undefined;
+            let beats = 0;
 
             if (type === "STREAM") {
                 const real = this.stores.StreamStore?.getStreamerActiveStreamMetadata;
@@ -217,13 +255,18 @@ export class TaskRunner {
                 cleanupHook = () => this.patcher.remove(game);
             }
 
-            this.cb.onProgress(q.id, { name: t.name, type, cur: 0, max: t.target, status: "RUNNING" });
+            // Seed from progress the server already holds. Painting 0 here made a resumed
+            // quest look like it had restarted from scratch until the next heartbeat
+            // (~30s later) corrected it.
+            const seeded = this.readProgress(q.userStatus, key);
+            this.cb.onProgress(q.id, { name: t.name, type, cur: seeded, max: t.target, status: "RUNNING" });
             logger.info(`[Task] Started ${type}: ${gameData.name}`);
 
             const finish = () => {
                 if (cleaned) return;
                 cleaned = true;
                 clearTimeout(safetyTimer);
+                clearTimeout(watchdogTimer);
                 try { cleanupHook(); } catch (e: any) { logger.debug(`[Task] Cleanup: ${e?.message}`); }
                 try { this.stores.Dispatcher?.unsubscribe(HEARTBEAT_EVT, check); } catch (e: any) { logger.debug(`[Dispatcher] Unsubscribe failed: ${e?.message}`); }
                 this.runtime.cleanups.delete(finish);
@@ -235,10 +278,24 @@ export class TaskRunner {
                 resolve();
             }, MAX_TIME) as unknown as number;
 
+            // Discord drives these quests: it sends /quests/{id}/heartbeat itself while it
+            // believes the game runs, and we only read the replies. If it never accepts the
+            // injected process, no heartbeat ever arrives and the task would sit "RUNNING"
+            // for the full 25 minutes with nothing happening. Give up after 90s (3 missed
+            // beats at the usual ~30s cadence) and say why.
+            watchdogTimer = setTimeout(() => {
+                if (beats > 0 || cleaned || !this.runtime.running) return;
+                logger.error(`[Task] Discord never reported progress for "${t.name}" — it isn't accepting the injected process on this client. Nothing to wait for.`);
+                this.failTask(q, t, "No heartbeat from Discord");
+                finish();
+                resolve();
+            }, HEARTBEAT_GRACE) as unknown as number;
+
             const check = (d: any) => {
                 if (!this.runtime.running) { finish(); resolve(); return; }
                 if (d?.questId !== q.id) return;
-                const prog = d.userStatus?.progress?.[key]?.value ?? d.userStatus?.streamProgressSeconds ?? 0;
+                beats++;
+                const prog = this.readProgress(d.userStatus, key);
                 this.cb.onProgress(q.id, { name: t.name, type, cur: prog, max: t.target, status: "RUNNING" });
                 if (prog >= t.target) {
                     finish();

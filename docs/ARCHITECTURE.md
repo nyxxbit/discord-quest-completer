@@ -54,7 +54,7 @@ The file is a layered IIFE; each "module" is a `const` object or function in the
 | `ErrorHandler`  | Classifies HTTP errors into retryable / client / skippable                                       |
 | `Traffic`       | Request queue with exponential backoff, rate-limit awareness, retry ceiling                      |
 | `Mods`          | Reference to the Discord webpack stores discovered at boot                                       |
-| `Patcher`       | Injects fake running-game records into `RunningGameStore`                                        |
+| `Patcher`       | Injects fake running-game records into `RunningGameStore`, incl. the visible/candidate getters   |
 | `Logger`        | Quest picker UI, dashboard renderer, log ring-buffer                                             |
 | `Tasks`         | Per-task-type handlers + `_bypassPost` transport picker + `bypassAchievement`                    |
 | `loadModules()` | Dual-path module extraction (Vencord API + native fallback)                                      |
