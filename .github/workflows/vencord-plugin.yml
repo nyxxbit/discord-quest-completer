@@ -10,6 +10,14 @@ on:
   # so the build can be kicked off by hand on any branch, without waiting for a
   # matching path change
   workflow_dispatch:
+  # The job builds against Vencord's default branch, so it doubles as a drift
+  # alarm: a weekly run catches an upstream change that breaks the plugin while
+  # nobody is touching this repo, instead of leaving it to a user bug report.
+  # Delete this block if the notifications aren't wanted - everything else still
+  # works. Note GitHub disables scheduled workflows after 60 days without a
+  # commit, and failure mail goes to whoever last edited the cron line.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, 06:00 UTC
   push:
     branches: [main]
     paths:
