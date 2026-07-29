@@ -1,0 +1,86 @@
+name: Vencord plugin build
+
+# The plugin sources live at the repo root so UserpluginInstaller can clone this
+# repo straight into src/userplugins. That layout is load-bearing and invisible
+# from inside this repo: Vencord only picks up index.ts(x) and native.ts from the
+# top level of a plugin folder, so moving them back into a subdirectory would
+# silently stop the plugin from building. This job is the guard for that.
+
+on:
+  # so the build can be kicked off by hand on any branch, without waiting for a
+  # matching path change
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "*.ts"
+      - "*.tsx"
+      - ".github/workflows/vencord-plugin.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "*.ts"
+      - "*.tsx"
+      - ".github/workflows/vencord-plugin.yml"
+
+jobs:
+  build:
+    name: Build Vencord with OrionQuests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Vencord
+        uses: actions/checkout@v6
+        with:
+          repository: Vendicated/Vencord
+          path: vencord
+
+      # The repo root IS the plugin folder, so checking this repo out into
+      # src/userplugins/<name> is exactly what UserpluginInstaller's `git clone`
+      # produces on a user's machine.
+      - name: Check out this repo as a userplugin
+        uses: actions/checkout@v6
+        with:
+          path: vencord/src/userplugins/discord-quest-completer
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: vencord/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: vencord/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: vencord
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        working-directory: vencord
+        run: pnpm run build
+
+      - name: Assert the plugin made it into the build
+        working-directory: vencord
+        run: |
+          set -euo pipefail
+
+          # index.tsx was resolved as the plugin entry, not the userscript
+          grep -q "OrionQuests" dist/renderer.js
+
+          # native.ts compiled into the main process bundle, so the CSP-exempt
+          # discordsays POSTs behind the ACHIEVEMENT bypass still work
+          grep -q "OrionQuests" dist/vencordDesktopMain.js
+          grep -q "discordsays" dist/vencordDesktopMain.js
+
+          # the slash command registered
+          grep -q "Control the OrionQuests engine" dist/renderer.js
+
+          # index.js is the standalone userscript and must never be bundled
+          if grep -q "orionLock" dist/renderer.js; then
+            echo "index.js leaked into the Vencord build" >&2
+            exit 1
+          fi
+
+          echo "OrionQuests is in the build."
