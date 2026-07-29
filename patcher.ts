@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: MIT
  *
  * Monkey-patches Discord's RunningGameStore so the client believes a
- * game process is running. Mirrors the Patcher module in ../index.js.
+ * game process is running. Mirrors the Patcher module in ./index.js.
  *
  * The fake game appears in `getRunningGames()` and the RPC dispatch
  * makes it show as "Playing X" in the friends list (unless suppressed

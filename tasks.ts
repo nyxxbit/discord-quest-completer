@@ -3,7 +3,7 @@
  * Copyright (c) 2026 nyxxbit
  * SPDX-License-Identifier: MIT
  *
- * Per-task-type handlers. Mirrors the Tasks module in ../index.js,
+ * Per-task-type handlers. Mirrors the Tasks module in ./index.js,
  * minus the DOM render/dashboard concerns. Phases 3-4 ported here.
  *
  * Each handler is async and resolves when the task either completes

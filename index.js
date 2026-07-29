@@ -1393,7 +1393,7 @@
             }
 
             // 2) Vencord plugin native module — works if user has OrionQuests Vencord plugin
-            //    installed (`vencord-plugin/native.ts`). Routes through Electron main process.
+            //    installed (`native.ts` at the repo root). Routes through Electron main process.
             try {
                 const helper = window.VencordNative?.pluginHelpers?.OrionQuests;
                 if (helper) {

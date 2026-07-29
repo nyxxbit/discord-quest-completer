@@ -2,9 +2,11 @@
 // Run locally with: npx eslint@9 index.js
 export default [
     {
-        // The Vencord userplugin is TypeScript and is built by Vencord's
-        // own toolchain — not by this config. Ignore it here.
-        ignores: ["vencord-plugin/**"],
+        // The Vencord userplugin sources (index.tsx, native.ts, orion.ts, ...)
+        // live at the repo root so UserpluginInstaller can clone this repo
+        // straight into src/userplugins. They are TypeScript and are built by
+        // Vencord's own toolchain — not by this config. Ignore them here.
+        ignores: ["**/*.ts", "**/*.tsx"],
     },
     {
         // ESM config files (this very file)

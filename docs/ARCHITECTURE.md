@@ -18,17 +18,23 @@ OrionQuest/
 ├── eslint.config.mjs              # ESLint flat config scoped to index.js
 ├── README.md                      # end-user facing docs
 ├── CONTRIBUTING.md
+│
+│   # Vencord/Equicord userplugin port (functional, in sync). These sit at the
+│   # repo root on purpose: UserpluginInstaller clones the repo straight into
+│   # src/userplugins/, and Vencord only loads index.ts(x) + native.ts from the
+│   # top level of a plugin folder — a subdirectory is never scanned.
+├── index.tsx                      # plugin entry, /orion slash command, lifecycle
+├── orion.ts                       # store loading, main cycle loop, dashboard registry
+├── tasks.ts                       # per-type handlers incl. the OAuth bypass
+├── native.ts                      # main-process IPC: CSP-exempt discordsays POSTs
+├── traffic.ts                     # FIFO request queue with backoff
+├── patcher.ts                     # RunningGameStore monkey-patch + RPC dispatch
+├── settings.ts                    # Vencord settings schema
+├── types.ts  ├── util.ts
+│
 ├── docs/
-│   └── ARCHITECTURE.md            # this file
-├── vencord-plugin/                # Vencord/Equicord userplugin port (functional, in sync)
-│   ├── index.tsx                  # plugin entry, /orion slash command, lifecycle
-│   ├── orion.ts                   # store loading, main cycle loop, dashboard registry
-│   ├── tasks.ts                   # per-type handlers incl. the OAuth bypass
-│   ├── native.ts                  # main-process IPC: CSP-exempt discordsays POSTs
-│   ├── traffic.ts                 # FIFO request queue with backoff
-│   ├── patcher.ts                 # RunningGameStore monkey-patch + RPC dispatch
-│   ├── settings.ts                # Vencord settings schema
-│   ├── types.ts  ├── util.ts
+│   ├── ARCHITECTURE.md            # this file
+│   └── VENCORD-PLUGIN.md          # userplugin install + usage guide
 ├── tools/
 │   ├── orion-relay/               # localhost HTTP relay (no client mod needed for the bypass)
 │   │   ├── orion-relay.ps1  ├── start-relay.cmd  └── README.md
@@ -162,9 +168,20 @@ All already in code, not proposals:
 - **Browsers / script-injection mobile browsers**: web-compatible quests only; `GAME`/`STREAM` are filtered out via `SYS.IS_DESKTOP`.
 - **ACHIEVEMENT bypass on Desktop**: needs the relay or the Vencord plugin (CSP can't be escaped from the renderer alone). On web Discord the direct fetch works.
 
-## Vencord plugin (`vencord-plugin/`)
+## Vencord plugin (repo root: `index.tsx` + siblings)
 
-A functional port, in sync with the userscript. It replaces manual webpack walking with `findStore`/`findByProps`, uses Vencord's settings instead of `CONFIG`, performs the CSP-exempt POSTs in `native.ts`, and exposes `/orion start|stop|status`. See `vencord-plugin/README.md`.
+A functional port, in sync with the userscript. It replaces manual webpack walking with `findStore`/`findByProps`, uses Vencord's settings instead of `CONFIG`, performs the CSP-exempt POSTs in `native.ts`, and exposes `/orion start|stop|status`. See `docs/VENCORD-PLUGIN.md`.
+
+### Why the plugin sources live at the repo root
+
+Vencord's build enumerates only the direct children of `src/userplugins` (`globPlugins` / `globNativesPlugin` in `scripts/build/build.mjs` + `scripts/build/common.mjs`): the plugin entry must be `index.ts`/`index.tsx` at the top level of the plugin folder, and native IPC must be `native.ts` (or `native/index.ts`) beside it. Nested subdirectories are never scanned. nin0's `UserpluginInstaller` runs a plain `git clone <repo>` into `src/userplugins`, so the clone root *is* the plugin folder — which means the plugin has to be the repo root for one-click install and in-app updates (`git fetch` + `git rebase origin/HEAD`) to work.
+
+The userscript's `index.js` stays at the root next to `index.tsx`. Both resolvers prefer the `.tsx`:
+
+- **Vencord/esbuild** resolves the directory import through `resolveExtensions`, where `.tsx` precedes `.js`.
+- **UserpluginInstaller** scans for `index.ts`/`index.tsx`/`index.js`/`index.jsx` and keeps the last match in `readdir` order; libuv sorts entries with `strcmp` on POSIX and NTFS returns them collated, so `index.tsx` always comes after `index.js`.
+
+`index.js` is therefore never mistaken for the plugin entry, and the userscript keeps its raw URL.
 
 ## Contributing
 

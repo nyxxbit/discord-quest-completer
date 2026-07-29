@@ -6,7 +6,7 @@
  * FIFO request queue with exponential backoff and rate-limit awareness.
  * Single egress point for every quest-related HTTP call.
  *
- * Mirrors the Traffic module in ../index.js. Decisions:
+ * Mirrors the Traffic module in ./index.js. Decisions:
  *   - 429 / 5xx → retryable, backoff with jitter, up to MAX_RETRIES.
  *   - 4xx (except 429) → reject to caller, who decides skip vs surface.
  *   - Global 429 freezes the whole queue; endpoint 429 reschedules just

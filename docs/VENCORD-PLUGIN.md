@@ -24,14 +24,28 @@ The remaining gap from the userscript is the floating dashboard panel — progre
 
 You need a working Vencord development setup. Follow [Vencord's installing guide](https://docs.vencord.dev/installing/) first if you haven't already.
 
+### Option A — UserpluginInstaller (one click, auto-updates)
+
+If you run [nin0's `UserpluginInstaller`](https://discord.com/channels/1015060230222131221/1302000818131828810/1302000818131828810), paste this repo's URL into its **Install Plugin** field:
+
+```
+https://github.com/nyxxbit/discord-quest-completer
+```
+
+It clones the repo into `src/userplugins/discord-quest-completer` and rebuilds. From then on the plugin shows up in the **UserPlugins** settings tab with an update button (`git fetch` + `git rebase origin/HEAD`), so new Orion releases land without touching a terminal.
+
+The install dialog will warn that this plugin **uses native modules**. That is expected and unavoidable: `native.ts` is what runs the `discordsays.com` POSTs in the Electron main process, where Discord's renderer CSP does not apply. Read it before you accept — the file is ~200 lines.
+
+The clone also brings the userscript (`index.js`), `docs/`, and `tools/` along, since the installer clones the whole repo. They are inert: Vencord only ever imports `index.tsx` and `native.ts` from a plugin folder.
+
+### Option B — manual clone
+
 ```bash
 # From inside your local Vencord clone
 cd src/userplugins
 
-# Pull just this plugin's directory
-git clone --depth 1 https://github.com/nyxxbit/discord-quest-completer.git _orion-temp
-mv _orion-temp/vencord-plugin orionQuests
-rm -rf _orion-temp
+# The repo root IS the plugin, so clone it directly
+git clone --depth 1 https://github.com/nyxxbit/discord-quest-completer.git
 
 # Rebuild Vencord with the new plugin included
 cd ../..
@@ -88,8 +102,10 @@ Exposed in Vencord's plugin settings UI. Persisted via Vencord's `DataStore`.
 
 ## Architecture
 
+The plugin sources sit at the **repo root**, so a clone of this repo is directly loadable as `src/userplugins/discord-quest-completer`:
+
 ```
-vencord-plugin/
+discord-quest-completer/
 ├── index.tsx     # plugin entry, /orion slash command, lifecycle
 ├── settings.ts   # Vencord settings schema
 ├── orion.ts      # store loading, main cycle loop, dashboard registry
@@ -98,8 +114,11 @@ vencord-plugin/
 ├── native.ts     # main-process IPC handlers — CSP-exempt discordsays POSTs
 ├── patcher.ts    # RunningGameStore monkey-patch + RPC dispatch
 ├── types.ts      # shared TypeScript interfaces
-└── util.ts       # sleep / rnd / sanitize helpers
+├── util.ts       # sleep / rnd / sanitize helpers
+└── index.js      # the standalone userscript — not part of the plugin build
 ```
+
+Vencord's build only scans the top level of a plugin folder for `index.ts(x)` and `native.ts`, which is why these files cannot live in a subdirectory. See [ARCHITECTURE.md](ARCHITECTURE.md#why-the-plugin-sources-live-at-the-repo-root) for the resolution details.
 
 Each module is the TypeScript equivalent of the same-named section in `../index.js`. Discord-specific webpack discovery is replaced by Vencord's `findStore` / `findByProps` + `Common.FluxDispatcher` / `Common.RestAPI`.
 
