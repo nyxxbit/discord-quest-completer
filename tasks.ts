@@ -5,36 +5,33 @@
  *
  * Per-task-type handlers. Mirrors the Tasks module in ./index.js,
  * minus the DOM render/dashboard concerns. Phases 3-4 ported here.
- *
- * Each handler is async and resolves when the task either completes
- * (target reached → finish()) or fails (skipped/timeout → failTask()).
  */
 
 import { Logger } from "@utils/Logger";
 import type { PluginNative } from "@utils/types";
 
+import { cleanupCreatedOAuthGrants } from "./oauthLifecycle";
 import type { Patcher } from "./patcher";
+import { taskEntries, taskForKey } from "./questConfig";
 import { settings } from "./settings";
+import type { TaskLifecycle } from "./taskControl";
 import type { Traffic } from "./traffic";
 import type { DetectedTask, FakeGame, OrionRuntime, Quest, Stores, TaskInfo, TaskType } from "./types";
 import { debug, rnd, sanitize, sleep, trafficMetadataSealed } from "./util";
 
 const logger = new Logger("OrionQuests");
 
-// Discord renderer CSP blocks connect-src to *.discordsays.com. The bypass
-// routes the discordsays POSTs through Vencord's main process via IPC, where
-// Node fetch runs without CSP restrictions.
 const Native = VencordNative.pluginHelpers.OrionQuests as PluginNative<typeof import("./native")>;
 
 const HEARTBEAT_EVT = "QUESTS_SEND_HEARTBEAT_SUCCESS";
-const MAX_TIME = 25 * 60 * 1000; // 25 minutes per task
-const HEARTBEAT_GRACE = 90 * 1000; // GAME/STREAM: give up if Discord sends no heartbeat
+const MAX_TIME = 25 * 60 * 1000;
+const HEARTBEAT_GRACE = 90 * 1000;
 const MAX_TASK_FAILURES = 5;
 
-// blacklisted quest known to break enrollment
+type ControlledTaskInfo = TaskInfo & { generation?: number; };
+
 const BLACKLISTED_QUEST_ID = "1412491570820812933";
 
-/** Outcome of one bypass attempt, so its diagnostics cannot be overwritten by another task. */
 export interface BypassResult {
     ok: boolean;
     reason: string | null;
@@ -47,70 +44,103 @@ export interface TaskCallbacks {
 
 export class TaskRunner {
     public skipped = new Set<string>();
-    /**
-     * Quests skipped only because the achievement bypass was switched off. A refusal
-     * to act, not a quest that can't be done. Tracked apart from `skipped` so turning
-     * the setting on can put them back in play. See retryConsentSkipped().
-     */
     public consentSkipped = new Set<string>();
     private stores: Stores;
     private traffic: Traffic;
     private patcher: Patcher;
     private runtime: OrionRuntime;
     private cb: TaskCallbacks;
-    /**
-     * Real getStreamerActiveStreamMetadata, stashed once like Patcher does with RunStore.
-     * May legitimately be undefined on builds that don't expose it, see the restore in generic().
-     */
+    private lifecycle?: TaskLifecycle;
     private streamReal: any;
-    private streamSpoofs = 0;
+    private streamSpoofs = new Map<string, { id: string | number; pid: number; sourceName: string; }>();
 
-    constructor(stores: Stores, traffic: Traffic, patcher: Patcher, runtime: OrionRuntime, cb: TaskCallbacks) {
+    constructor(
+        stores: Stores,
+        traffic: Traffic,
+        patcher: Patcher,
+        runtime: OrionRuntime,
+        cb: TaskCallbacks,
+        lifecycle?: TaskLifecycle,
+    ) {
         this.stores = stores;
         this.traffic = traffic;
         this.patcher = patcher;
         this.runtime = runtime;
         this.cb = cb;
+        this.lifecycle = lifecycle;
         this.streamReal = stores.StreamStore?.getStreamerActiveStreamMetadata;
     }
 
-    /**
-     * Newer quest configs (taskConfigV2) carry the app per task as tasks[key].applications[];
-     * older ones had a single config.application.id. A GAME quest built with the wrong id
-     * produces a fake process Discord can't match to the quest, so it never schedules a
-     * heartbeat (issue #43).
-     */
-    appIdFor(cfg: any, keyName: string, legacyAppId?: string): string | null {
-        return cfg?.tasks?.[keyName]?.applications?.[0]?.id ?? legacyAppId ?? null;
+    private isTaskActive(t: ControlledTaskInfo): boolean {
+        if (!this.runtime.running) return false;
+        if (t.generation == null || !this.lifecycle) return true;
+        return this.lifecycle.isActive(t.id, t.generation);
     }
 
-    /**
-     * userStatus.progress is a plain object over REST, but dispatched payloads go through the
-     * client's own transform first, so the shape isn't ours to assume. Defensive: if it ever
-     * arrives as a Map, indexing with [] would read undefined and silently look like
-     * "no progress".
-     */
+    /** Bind queue/backoff cancellation to the exact task generation, not a polling clock. */
+    private enqueue<T = any>(t: ControlledTaskInfo, url: string, body: unknown): Promise<T> {
+        const signal = t.generation != null && this.lifecycle
+            ? this.lifecycle.signalFor(t.id, t.generation) ?? undefined
+            : undefined;
+        return this.traffic.enqueue<T>(url, body, () => this.isTaskActive(t), signal);
+    }
+
+    private addCleanup(t: ControlledTaskInfo, cleanup: () => void): boolean {
+        if (t.generation != null && this.lifecycle) {
+            return this.lifecycle.addCleanup(t.id, t.generation, cleanup);
+        }
+        this.runtime.cleanups.add(cleanup);
+        return true;
+    }
+
+    private removeCleanup(t: ControlledTaskInfo, cleanup: () => void): void {
+        if (t.generation != null && this.lifecycle) {
+            this.lifecycle.removeCleanup(t.id, t.generation, cleanup);
+            return;
+        }
+        this.runtime.cleanups.delete(cleanup);
+    }
+
+    private async wait(t: ControlledTaskInfo, ms: number): Promise<boolean> {
+        if (!this.isTaskActive(t)) return false;
+        if (t.generation != null && this.lifecycle) {
+            return this.lifecycle.waitForDelay(t.id, t.generation, ms);
+        }
+        await sleep(ms);
+        return this.isTaskActive(t);
+    }
+
+    private syncStreamSpoof(): void {
+        if (!this.stores.StreamStore) return;
+
+        let latest: { id: string | number; pid: number; sourceName: string; } | undefined;
+        for (const spoof of this.streamSpoofs.values()) latest = spoof;
+
+        if (!latest) {
+            this.stores.StreamStore.getStreamerActiveStreamMetadata = this.streamReal;
+            return;
+        }
+
+        const current = latest;
+        this.stores.StreamStore.getStreamerActiveStreamMetadata = () => ({
+            id: current.id,
+            pid: current.pid,
+            sourceName: current.sourceName,
+        });
+    }
+
+    appIdFor(cfg: any, keyName: string, legacyAppId?: string): string | null {
+        return taskForKey(cfg, keyName)?.applications?.[0]?.id ?? legacyAppId ?? null;
+    }
+
     readProgress(userStatus: any, key: string): number {
         const p = userStatus?.progress;
         const entry = p instanceof Map ? p.get(key) : p?.[key];
         return entry?.value ?? userStatus?.streamProgressSeconds ?? 0;
     }
 
-    /**
-     * Detect task type from quest config.
-     *
-     * The exact keys come first and the loose prefixes last, and that order is the whole
-     * point. This used to test `k.includes("PLAY")` before anything else, and
-     * "PLAY_ACTIVITY".includes("PLAY") is true, so every activity quest was routed to the GAME
-     * handler: it injected a fake process and then waited for heartbeats Discord does not send
-     * for an activity task, so the quest never finished and the ACTIVITY handler was
-     * unreachable for its own quest type. Verified against a live client.
-     *
-     * The prefix entries still catch platform variants (PLAY_ON_XBOX, WATCH_VIDEO_ON_MOBILE)
-     * and anything new Discord adds under the same families.
-     */
     detectType(cfg: any, applicationId?: string): DetectedTask | null {
-        const taskKeys = Object.keys(cfg.tasks);
+        const entries = taskEntries(cfg?.tasks);
         const typeMap: Array<{ match: (k: string) => boolean; type: TaskType; }> = [
             { match: k => k === "ACHIEVEMENT_IN_ACTIVITY", type: "ACHIEVEMENT" },
             { match: k => k === "PLAY_ACTIVITY", type: "ACTIVITY" },
@@ -119,27 +149,31 @@ export class TaskRunner {
             { match: k => k.startsWith("PLAY"), type: "GAME" },
             { match: k => k.includes("ACTIVITY"), type: "ACTIVITY" },
         ];
+
         for (const { match, type } of typeMap) {
-            const keyName = taskKeys.find(match);
-            if (keyName) {
+            const entry = entries.find(([key]) => match(key));
+            if (entry) {
+                const [keyName, task] = entry;
                 return {
-                    type, keyName,
-                    target: cfg.tasks[keyName]?.target ?? 0,
+                    type,
+                    keyName,
+                    target: task?.target ?? 0,
                     appId: this.appIdFor(cfg, keyName, applicationId),
                 };
             }
         }
-        if (applicationId) {
+
+        if (applicationId && entries.length > 0) {
             return {
-                type: "GAME", keyName: "PLAY_ON_DESKTOP",
-                target: cfg.tasks[taskKeys[0]]?.target ?? 0,
+                type: "GAME",
+                keyName: "PLAY_ON_DESKTOP",
+                target: entries[0][1]?.target ?? 0,
                 appId: applicationId,
             };
         }
         return null;
     }
 
-    /** Pull real exe metadata from Discord's app registry; falls back to synthetic paths. */
     async fetchGameData(appId: string | number, appName: string): Promise<any> {
         try {
             const res = await this.stores.API.get({ url: `/applications/public?application_ids=${appId}` });
@@ -160,7 +194,8 @@ export class TaskRunner {
             const cleanName = sanitize(appName);
             const safeExe = `${cleanName.replace(/\s+/g, "")}.exe`;
             return {
-                name: appName, exeName: safeExe,
+                name: appName,
+                exeName: safeExe,
                 cmdLine: `C:\\Program Files\\${cleanName}\\${safeExe}`,
                 exePath: `c:/program files/${cleanName.toLowerCase()}/${safeExe}`,
                 id: appId,
@@ -168,15 +203,6 @@ export class TaskRunner {
         }
     }
 
-    /**
-     * Claim a completed quest's reward.
-     *
-     * Body shaped after Discord's own claim action, which sends
-     * `{platform, location, is_targeted, metadata_sealed, traffic_metadata_sealed}` and
-     * nothing else. Two differences used to be visible on every claim: Orion added
-     * `metadata_raw` and `traffic_metadata_raw`, which Discord never sends, and it nulled
-     * `traffic_metadata_sealed` even though the value is sitting on the quest record.
-     */
     async claimReward(questId: string): Promise<any> {
         return this.stores.API.post({
             url: `/quests/${questId}/claim-reward`,
@@ -191,85 +217,63 @@ export class TaskRunner {
     }
 
     failTask(q: Quest, t: TaskInfo, reason: string): void {
+        if (!this.isTaskActive(t)) return;
         this.cb.onProgress(q.id, { name: t.name, type: t.type, cur: 0, max: t.target, status: "FAILED", reason });
         logger.error(`[Task] Aborted "${t.name}": ${reason}`);
         this.skipped.add(q.id);
     }
 
-    /** WATCH_VIDEO: send fake video-progress timestamps until Discord marks the quest done. */
     async VIDEO(q: Quest, t: TaskInfo, s: any): Promise<void> {
-        let cur: number = s?.progress?.[t.keyName]?.value ?? s?.progress?.[t.type]?.value ?? 0;
+        if (!this.isTaskActive(t)) return;
+
+        let cur = this.readProgress(s, t.keyName);
         let failCount = 0;
-
         this.cb.onProgress(q.id, { name: t.name, type: "WATCH_VIDEO", cur, max: t.target, status: "RUNNING" });
-
         const startTime = Date.now();
 
-        // No synthetic first ping. It used to fire 200-350ms in with a timestamp of
-        // 0.200-0.250, which meant every video quest from every user opened with a value
-        // inside the same 50ms window. A real player reports its first tick on its own
-        // cadence, so the loop below is left to send it.
-
-        while (cur < t.target && this.runtime.running) {
-            // Match Discord's native player cadence. A shorter interval buys nothing:
-            // `cur` advances by real elapsed time below, so the quest still takes `target`
-            // seconds of wall clock either way, and halving the delay only doubles the
-            // number of requests. Measured: 68s target finished in 73s at 18 requests.
+        while (cur < t.target && this.isTaskActive(t)) {
             const delayMs = rnd(7000, 9500);
-            await sleep(delayMs);
+            if (!await this.wait(t, delayMs)) return;
+
             const elapsedSec = (delayMs / 1000) + (Math.random() * 0.02 - 0.01);
             cur += elapsedSec;
             const payloadTs = Number(Math.min(t.target, cur).toFixed(6));
 
             try {
-                const r: any = await this.traffic.enqueue(`/quests/${q.id}/video-progress`, { timestamp: payloadTs });
+                const r: any = await this.enqueue(t, `/quests/${q.id}/video-progress`, { timestamp: payloadTs });
+                if (!this.isTaskActive(t)) return;
                 const serverVal: number | undefined = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.WATCH_VIDEO?.value;
                 if (serverVal !== undefined && serverVal > cur) cur = Math.min(t.target, serverVal);
                 if (r?.body?.completed_at) break;
                 failCount = 0;
             } catch (e: any) {
+                if (!this.isTaskActive(t)) return;
                 failCount++;
                 if (e?.status && [400, 403, 404, 409, 410].includes(e.status)) {
                     logger.warn(`[Task] Video quest unavailable (HTTP ${e.status}). Skipping.`);
                     return this.failTask(q, t, `Client Error ${e.status}`);
                 }
-                if (failCount >= MAX_TASK_FAILURES) {
-                    return this.failTask(q, t, "Too many network failures");
-                }
+                if (failCount >= MAX_TASK_FAILURES) return this.failTask(q, t, "Too many network failures");
             }
+
+            if (!this.isTaskActive(t)) return;
             this.cb.onProgress(q.id, { name: t.name, type: "WATCH_VIDEO", cur, max: t.target, status: "RUNNING" });
-            if (Date.now() - startTime > MAX_TIME) {
-                return this.failTask(q, t, "Timeout exceeded");
-            }
+            if (Date.now() - startTime > MAX_TIME) return this.failTask(q, t, "Timeout exceeded");
         }
-        if (this.runtime.running) await this.cb.onComplete(q, t);
+
+        if (this.isTaskActive(t)) await this.cb.onComplete(q, t);
     }
 
-    /** GAME / STREAM share an injection path: fake process + heartbeat subscription. */
     async generic(q: Quest, t: TaskInfo, type: TaskType, fallbackKey: string): Promise<void> {
-        if (!this.runtime.running) return;
-        // Prefer the key detected from the quest config. detectType matches task keys by
-        // substring, so a renamed variant (a PLAY_ON_DESKTOP_V2, say) still resolves, but
-        // reading progress under a hardcoded legacy name would return undefined and pin the
-        // task at 0 until the safety timer kills it.
+        if (!this.isTaskActive(t)) return;
         const key = t.keyName || fallbackKey;
         const gameData = await this.fetchGameData(t.appId, t.name);
-
-        // Re-check after the await, not only before it. Fetching the app metadata is a network
-        // round trip, and a stop landing inside it used to let this continuation wake up and
-        // install a spoof for a run that had already torn down. That is not harmless: every
-        // Patcher captures the store methods it considers real when it is constructed, so a
-        // stale run installing on top of a newer one and then restoring its own snapshot wipes
-        // the newer run's wrappers. Reproduced live: run A held here, stopped, run B started
-        // and spoofed normally, then A resumed and B's fake game disappeared from
-        // RunningGameStore with the store back to pristine, leaving B running a quest Discord
-        // could no longer see. Since #58 each run owns its runtime, so a later start cannot
-        // flip this back to true, and there is no await between here and the synchronous
-        // executor below for a stop to interleave into.
-        if (!this.runtime.running) return;
+        if (!this.isTaskActive(t)) return;
 
         return new Promise<void>(resolve => {
-            const pid = rnd(2500, 12500) * 4; // multiples of 4 (Windows NT kernel alignment)
+            if (!this.isTaskActive(t)) { resolve(); return; }
+
+            const pid = rnd(2500, 12500) * 4;
             const game: FakeGame = {
                 id: gameData.id,
                 name: gameData.name,
@@ -282,45 +286,20 @@ export class TaskRunner {
                 exePath: gameData.exePath,
                 cmdLine: gameData.cmdLine,
                 executables: [{ os: "win32", name: gameData.exeName, is_launcher: false }],
-                windowHandle: 0, fullscreenType: 0, overlay: true, sandboxed: false,
-                hidden: false, isLauncher: false,
+                windowHandle: 0,
+                fullscreenType: 0,
+                overlay: true,
+                sandboxed: false,
+                hidden: false,
+                isLauncher: false,
             };
 
-            let cleanupHook: () => void;
+            let cleanupHook: () => void = () => { };
             let cleaned = false;
             let safetyTimer: number | undefined;
             let watchdogTimer: number | undefined;
+            let subscribed = false;
             let beats = 0;
-
-            if (type === "STREAM") {
-                // Restore from the original captured in the constructor, never from whatever is
-                // installed now: with concurrency > 1 a second STREAM task would otherwise stash
-                // the first task's spoof and "restore" that, leaving the store patched after the
-                // engine stops. Refcounted so the last task out puts the real method back, and
-                // it restores even when the original was undefined, since assigning undefined
-                // back is the correct revert (same reasoning as index.js).
-                if (this.stores.StreamStore) {
-                    this.streamSpoofs++;
-                    this.stores.StreamStore.getStreamerActiveStreamMetadata = () => ({
-                        id: gameData.id, pid, sourceName: gameData.name,
-                    });
-                }
-                cleanupHook = () => {
-                    if (this.stores.StreamStore && this.streamSpoofs > 0 && --this.streamSpoofs === 0) {
-                        this.stores.StreamStore.getStreamerActiveStreamMetadata = this.streamReal;
-                    }
-                };
-            } else {
-                this.patcher.add(game);
-                cleanupHook = () => this.patcher.remove(game);
-            }
-
-            // Seed from progress the server already holds. Painting 0 here made a resumed
-            // quest look like it had restarted from scratch until the next heartbeat
-            // (~30s later) corrected it.
-            const seeded = this.readProgress(q.userStatus, key);
-            this.cb.onProgress(q.id, { name: t.name, type, cur: seeded, max: t.target, status: "RUNNING" });
-            logger.info(`[Task] Started ${type}: ${gameData.name}`);
 
             const finish = () => {
                 if (cleaned) return;
@@ -328,35 +307,52 @@ export class TaskRunner {
                 clearTimeout(safetyTimer);
                 clearTimeout(watchdogTimer);
                 try { cleanupHook(); } catch (e: any) { debug(logger, `[Task] Cleanup: ${e?.message}`); }
-                try { this.stores.Dispatcher?.unsubscribe(HEARTBEAT_EVT, check); } catch (e: any) { debug(logger, `[Dispatcher] Unsubscribe failed: ${e?.message}`); }
-                this.runtime.cleanups.delete(abort);
+                if (subscribed) {
+                    try { this.stores.Dispatcher?.unsubscribe(HEARTBEAT_EVT, check); }
+                    catch (e: any) { debug(logger, `[Dispatcher] Unsubscribe failed: ${e?.message}`); }
+                }
+                this.removeCleanup(t, abort);
             };
 
-            // What shutdown runs. finish() alone tears down the timers that would otherwise have
-            // resolved this promise, so registering it bare left the task pending forever: the
-            // cycle loop stayed parked on Promise.all and startOrion never returned. Kept separate
-            // from finish() so the completion path can still wait for onComplete (auto-claim)
-            // before resolving.
             const abort = () => { finish(); resolve(); };
 
+            // Install the task-owned cleanup immediately after the resource appears. If Pause
+            // lands in this narrow setup window, addCleanup fails and we roll the resource back
+            // ourselves instead of leaving a fake process/stream behind with no owner.
+            if (type === "STREAM") {
+                if (this.stores.StreamStore) {
+                    this.streamSpoofs.set(q.id, { id: gameData.id, pid, sourceName: gameData.name });
+                    this.syncStreamSpoof();
+                }
+                cleanupHook = () => {
+                    if (!this.stores.StreamStore) return;
+                    this.streamSpoofs.delete(q.id);
+                    this.syncStreamSpoof();
+                };
+            } else {
+                this.patcher.add(game);
+                cleanupHook = () => this.patcher.remove(game);
+            }
+
+            if (!this.addCleanup(t, abort)) {
+                abort();
+                return;
+            }
+
+            const seeded = this.readProgress(q.userStatus, key);
+            this.cb.onProgress(q.id, { name: t.name, type, cur: seeded, max: t.target, status: "RUNNING" });
+            logger.info(`[Task] Started ${type}: ${gameData.name}`);
+
             safetyTimer = setTimeout(() => {
-                if (this.runtime.running) this.failTask(q, t, "Timeout exceeded (25m)");
+                if (this.isTaskActive(t)) this.failTask(q, t, "Timeout exceeded (25m)");
                 finish();
                 resolve();
             }, MAX_TIME) as unknown as number;
 
-            // Discord drives these quests: it sends /quests/{id}/heartbeat itself while it
-            // believes the game runs, and we only read the replies. If it never accepts the
-            // injected process, no heartbeat ever arrives and the task would sit "RUNNING"
-            // for the full 25 minutes with nothing happening. Give up after 90s (3 missed
-            // beats at the usual ~30s cadence) and say why.
-            // Re-armed on every beat rather than checked once, so it also catches a quest that
-            // beats a few times and then goes silent. A one-shot `beats > 0` test would let that
-            // sit RUNNING for the full 25 minutes with nothing actually happening.
             const armWatchdog = () => {
                 clearTimeout(watchdogTimer);
                 watchdogTimer = setTimeout(() => {
-                    if (cleaned || !this.runtime.running) return;
+                    if (cleaned || !this.isTaskActive(t)) return;
                     logger.error(beats === 0
                         ? `[Task] Discord never reported progress for "${t.name}". It is not accepting the injected process on this client, so there is nothing to wait for.`
                         : `[Task] Discord stopped reporting progress for "${t.name}" after ${beats} update(s). Giving up instead of idling.`);
@@ -368,7 +364,7 @@ export class TaskRunner {
             armWatchdog();
 
             const check = (d: any) => {
-                if (!this.runtime.running) { finish(); resolve(); return; }
+                if (!this.isTaskActive(t)) { finish(); resolve(); return; }
                 if (d?.questId !== q.id) return;
                 beats++;
                 armWatchdog();
@@ -376,49 +372,55 @@ export class TaskRunner {
                 this.cb.onProgress(q.id, { name: t.name, type, cur: prog, max: t.target, status: "RUNNING" });
                 if (prog >= t.target) {
                     finish();
+                    if (!this.isTaskActive(t)) { resolve(); return; }
                     this.cb.onComplete(q, t).finally(() => resolve());
                 }
             };
 
-            this.stores.Dispatcher?.subscribe(HEARTBEAT_EVT, check);
-            this.runtime.cleanups.add(abort);
+            try {
+                this.stores.Dispatcher?.subscribe(HEARTBEAT_EVT, check);
+                subscribed = true;
+            } catch (e: any) {
+                if (this.isTaskActive(t)) this.failTask(q, t, `Heartbeat subscription failed: ${e?.message ?? e}`);
+                abort();
+            }
         });
     }
 
     GAME(q: Quest, t: TaskInfo): Promise<void> { return this.generic(q, t, "GAME", "PLAY_ON_DESKTOP"); }
     STREAM(q: Quest, t: TaskInfo): Promise<void> { return this.generic(q, t, "STREAM", "STREAM_ON_DESKTOP"); }
 
-    /** ACTIVITY: heartbeat against a voice channel to simulate participation. */
     async ACTIVITY(q: Quest, t: TaskInfo): Promise<void> {
+        if (!this.isTaskActive(t)) return;
+
         const key = this.streamKey();
         if (!key) return this.failTask(q, t, "No voice channel found");
-        // Discord's own heartbeat always carries application_id. Sending only stream_key and
-        // terminal made every Orion beat structurally different from a real one.
         const beat = { stream_key: key, application_id: String(t.appId || ""), terminal: false };
-        let cur = 0;
+        let cur = this.readProgress(q.userStatus, t.keyName);
         let failCount = 0;
         let stalledBeats = 0;
         this.cb.onProgress(q.id, { name: t.name, type: "ACTIVITY", cur, max: t.target, status: "RUNNING" });
         const startTime = Date.now();
 
-        while (cur < t.target && this.runtime.running) {
+        while (cur < t.target && this.isTaskActive(t)) {
             try {
-                const r: any = await this.traffic.enqueue(`/quests/${q.id}/heartbeat`, beat);
+                const r: any = await this.enqueue(t, `/quests/${q.id}/heartbeat`, beat);
+                if (!this.isTaskActive(t)) return;
                 const reported = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.PLAY_ACTIVITY?.value;
-                // Never invent progress. This used to fall back to `cur + 20`, so a server that
-                // credited nothing still walked the counter to target and the quest was reported
-                // complete on the strength of numbers Orion made up. Count the silent beats and
-                // give up instead.
                 if (typeof reported === "number") { cur = reported; stalledBeats = 0; }
                 else if (++stalledBeats >= MAX_TASK_FAILURES) return this.failTask(q, t, "Discord credited no progress");
                 this.cb.onProgress(q.id, { name: t.name, type: "ACTIVITY", cur, max: t.target, status: "RUNNING" });
                 failCount = 0;
                 if (cur >= t.target) {
-                    try { await this.traffic.enqueue(`/quests/${q.id}/heartbeat`, { ...beat, terminal: true }); }
-                    catch (e: any) { debug(logger, `[ACTIVITY] Final heartbeat failed: ${e?.message}`); }
+                    try {
+                        await this.enqueue(t, `/quests/${q.id}/heartbeat`, { ...beat, terminal: true });
+                    } catch (e: any) {
+                        if (this.isTaskActive(t)) debug(logger, `[ACTIVITY] Final heartbeat failed: ${e?.message}`);
+                    }
                     break;
                 }
             } catch (e: any) {
+                if (!this.isTaskActive(t)) return;
                 failCount++;
                 if (e?.status && [400, 403, 404, 409, 410].includes(e.status)) {
                     logger.warn(`[Task] Activity quest unavailable (HTTP ${e.status}). Skipping.`);
@@ -426,76 +428,49 @@ export class TaskRunner {
                 }
                 if (failCount >= MAX_TASK_FAILURES) return this.failTask(q, t, "Too many network failures");
             }
+            if (!this.isTaskActive(t)) return;
             if (Date.now() - startTime > MAX_TIME) return this.failTask(q, t, "Timeout exceeded");
-            await sleep(rnd(19000, 22000));
+            if (!await this.wait(t, rnd(19000, 22000))) return;
         }
-        if (this.runtime.running && cur >= t.target) await this.cb.onComplete(q, t);
+
+        if (this.isTaskActive(t) && cur >= t.target) await this.cb.onComplete(q, t);
     }
 
-    /**
-     * OAuth2 → discordsays.com bypass for ACHIEVEMENT_IN_ACTIVITY.
-     * Discord trusts the activity backend to validate progress, so a forged
-     * POST from an authorized session is accepted. Flow:
-     *   1) /oauth2/authorize the quest's app (returns code in location URL)
-     *   2) /applications/{appId}/proxy-tickets (returns proxy ticket)
-     *   3) POST {appId}.discordsays.com/.proxy/acf/authorize {code} → DS token
-     *   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
-     *   5) /oauth2/tokens + DELETE to clean up the grant
-     */
-    /**
-     * Returns whether the bypass completed the quest, and when it did not, why.
-     *
-     * The reason used to live in a field on the TaskRunner, which is shared by every task the
-     * runner owns. ACHIEVEMENT tasks go into the same worker pool as games, so with
-     * gameConcurrency above 1 two of them run against the same runner: one records its reason,
-     * then sits in the grant-cleanup finally while the other enters here and resets the field,
-     * and the first reads back null or the other task's reason. Diagnostics for a single
-     * attempt belong to that attempt, so they come back as its return value (issue #61).
-     */
     async bypassAchievement(q: Quest, t: TaskInfo): Promise<BypassResult> {
-        // taskConfigV2 moved the app off config.application and onto the task, so reading the
-        // legacy field alone resolves null on every current quest and this bailed out before it
-        // ever tried. t.appId already carries whatever appIdFor resolved, so prefer it and keep
-        // the legacy read as the last fallback (issue #43).
-        // TaskInfo.appId is string | number (it carries a `?? 0` fallback), and this value is
-        // interpolated into discordsays URLs, so normalise to string once here.
-        const appId = String(t.appId || q.config?.application?.id || "");
         let reason: string | null = null;
+        if (!this.isTaskActive(t)) return { ok: false, reason };
+
+        const accountId = this.stores.UserStore?.getCurrentUser?.()?.id ?? null;
+        const appId = String(t.appId || q.config?.application?.id || "");
         if (!appId) {
             reason = "this quest carries no application id, so there is nothing to authorize against";
             return { ok: false, reason };
         }
-        // Consent gate: the OAuth bypass authorizes a third-party app on the user's account.
-        // It only runs when the user explicitly enabled it in settings (default off). The toggle
-        // is the informed-consent gate and covers the non-interactive /orion start + Auto-Start paths.
         if (!settings.store.achievementBypass) {
             logger.info(`[Bypass] Achievement OAuth bypass is off in settings; skipping "${t.name}". Enable it in OrionQuests settings if you want it.`);
             return { ok: false, reason };
         }
-        // appId is interpolated straight into discordsays URLs. Refuse anything
-        // non-numeric so a malformed/hostile id can't redirect the request elsewhere.
         if (!/^\d+$/.test(appId)) {
             reason = `the quest's application id ("${appId}") is not numeric, so it was refused before any request went out`;
             logger.warn(`[Bypass] Refusing non-numeric appId "${appId}".`);
             return { ok: false, reason };
         }
 
-        // Snapshot the grants this app already has BEFORE we authorize, so cleanup
-        // revokes only the grant we create and never one the user made themselves.
-        // The snapshot is a precondition: if it fails we abort before authorizing, so we
-        // never create a grant we can't later identify and revoke.
         let preGrantIds: Set<string> | undefined;
         try {
             const before: any = await this.stores.API.get({ url: "/oauth2/tokens" });
-            if (!this.runtime.running) return { ok: false, reason };
-            preGrantIds = new Set((before?.body || []).filter((tk: any) => tk.application?.id === appId).map((tk: any) => tk.id));
+            if (!this.isTaskActive(t)) return { ok: false, reason };
+            preGrantIds = new Set((before?.body || [])
+                .filter((tk: any) => tk.application?.id === appId)
+                .map((tk: any) => tk.id));
         } catch (e: any) {
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             logger.warn(`[Bypass] Couldn't snapshot existing grants; aborting so we never leave an un-revocable authorization: ${e?.message}`);
             return { ok: false, reason };
         }
 
         try {
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             logger.info(`[Bypass] Trying Discord Says auth flow for "${t.name}"...`);
 
             const authRes: any = await this.stores.API.post({
@@ -512,38 +487,39 @@ export class TaskRunner {
                     location_context: { guild_id: "10000", channel_id: "10000", channel_type: 10000 }
                 }
             });
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const location: string | undefined = authRes?.body?.location;
             if (!location) throw new Error("no location in /oauth2/authorize response");
             const authCode = new URL(location).searchParams.get("code");
             if (!authCode) throw new Error("no code in authorize location");
 
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const ticketRes: any = await this.stores.API.post({ url: `/applications/${appId}/proxy-tickets`, body: {} });
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const proxyTicket: string | undefined = ticketRes?.body?.ticket;
             if (!proxyTicket) throw new Error("no proxy ticket");
 
             const referrer = `https://${appId}.discordsays.com/?instance_id=example-cl-instance&platform=desktop&discord_proxy_ticket=${encodeURIComponent(proxyTicket)}`;
 
-            // CSP-exempt main-process fetch via the native module
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const dsAuthRes = await Native.discordsaysAuthorize({ appId, questId: q.id, authCode, referrer });
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             if (!dsAuthRes.ok) throw new Error(`discordsays authorize ${dsAuthRes.status}`);
             let dsToken: string | undefined;
             try { dsToken = (JSON.parse(dsAuthRes.body) as { token?: string }).token; }
             catch { throw new Error("discordsays returned non-JSON: " + String(dsAuthRes.body).slice(0, 120)); }
             if (!dsToken) throw new Error("no discordsays token");
 
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const progRes = await Native.discordsaysProgress({ appId, questId: q.id, token: dsToken, target: t.target, referrer });
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             if (!progRes.ok) throw new Error(`discordsays progress ${progRes.status}`);
 
             logger.info(`[Bypass] Success. "${t.name}" completed via Discord Says.`);
             return { ok: true, reason: null };
         } catch (e: any) {
-            if (!this.runtime.running) return { ok: false, reason };
+            if (!this.isTaskActive(t)) return { ok: false, reason };
             const code = e?.body?.code;
-            // 50165 = Cannot launch Age-Gated Activity: age-gated or delisted
             if (code === 50165) {
                 reason = "the activity is age-gated or delisted, so Discord refuses the proxy ticket on this account";
                 logger.warn(`[Bypass] "${t.name}" can't be launched (age-gated or delisted). Discord blocks the proxy ticket, so there is nothing we can do.`);
@@ -560,15 +536,28 @@ export class TaskRunner {
             logger.warn(`[Bypass] Failed: ${parts.join(", ") || "unknown"}`);
             return { ok: false, reason };
         } finally {
-            // Revoke ONLY the grant we created, diffed against the pre-flow snapshot.
-            // Deliberately not gated on runtime.running: a request sent before STOP may
-            // already have created a grant that still needs compensating cleanup.
-            if (preGrantIds) {
-                const snap = preGrantIds;
+            // Compensating cleanup is intentionally allowed after task cancellation because a
+            // request already on the wire may have created a grant. Account identity is checked
+            // around every awaited cleanup boundary so an old task cannot touch the next user's
+            // OAuth state after a Discord account switch.
+            if (preGrantIds && accountId) {
                 try {
-                    const after: any = await this.stores.API.get({ url: "/oauth2/tokens" });
-                    const ours = (after?.body || []).filter((tk: any) => tk.application?.id === appId && !snap.has(tk.id));
-                    for (const g of ours) await this.stores.API.del({ url: `/oauth2/tokens/${g.id}` });
+                    const cleanup = await cleanupCreatedOAuthGrants({
+                        accountId,
+                        appId,
+                        preGrantIds,
+                        getCurrentAccountId: () => this.stores.UserStore?.getCurrentUser?.()?.id ?? null,
+                        listGrants: async () => {
+                            const after: any = await this.stores.API.get({ url: "/oauth2/tokens" });
+                            return after?.body || [];
+                        },
+                        deleteGrant: async id => {
+                            await this.stores.API.del({ url: `/oauth2/tokens/${id}` });
+                        },
+                    });
+                    if (cleanup.status === "account-changed") {
+                        logger.warn(`[Bypass] Account changed while cleaning up "${t.name}"; stopped OAuth grant cleanup rather than touching the new account.`);
+                    }
                 } catch (e: any) {
                     debug(logger, `[Bypass] Deauthorize cleanup non-fatal: ${e?.message}`);
                 }
@@ -576,36 +565,35 @@ export class TaskRunner {
         }
     }
 
-    /**
-     * ACHIEVEMENT_IN_ACTIVITY. Target is usually 1 (a milestone, not seconds).
-     *   1) heartbeat spoof (works for some quests)
-     *   2) discordsays OAuth bypass (silver bullet)
-     *   3) skip on failure, with no 25-minute passive wait
-     */
     async ACHIEVEMENT(q: Quest, t: TaskInfo): Promise<void> {
-        this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur: 0, max: t.target, status: "RUNNING" });
+        if (!this.isTaskActive(t)) return;
+
+        let cur = this.readProgress(q.userStatus, t.keyName);
+        this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur, max: t.target, status: "RUNNING" });
 
         const key = this.streamKey();
         if (key) {
             const beat = { stream_key: key, application_id: String(t.appId || ""), terminal: false };
-            let cur = 0;
             let failCount = 0;
             logger.info(`[Task] Attempting heartbeat spoofing for "${t.name}"...`);
 
-            while (cur < t.target && this.runtime.running) {
+            while (cur < t.target && this.isTaskActive(t)) {
                 try {
-                    const r: any = await this.traffic.enqueue(`/quests/${q.id}/heartbeat`, beat);
-                    if (!this.runtime.running) return;
+                    const r: any = await this.enqueue(t, `/quests/${q.id}/heartbeat`, beat);
+                    if (!this.isTaskActive(t)) return;
                     cur = r?.body?.progress?.[t.keyName]?.value ?? r?.body?.progress?.ACHIEVEMENT_IN_ACTIVITY?.value ?? cur;
                     this.cb.onProgress(q.id, { name: t.name, type: "ACHIEVEMENT", cur, max: t.target, status: "RUNNING" });
                     failCount = 0;
                     if (cur >= t.target) {
-                        try { await this.traffic.enqueue(`/quests/${q.id}/heartbeat`, { ...beat, terminal: true }); }
-                        catch { /* noop */ }
+                        try {
+                            await this.enqueue(t, `/quests/${q.id}/heartbeat`, { ...beat, terminal: true });
+                        } catch {
+                            if (!this.isTaskActive(t)) return;
+                        }
                         break;
                     }
                 } catch (e: any) {
-                    if (!this.runtime.running) return;
+                    if (!this.isTaskActive(t)) return;
                     failCount++;
                     if (e?.status && [400, 403, 404, 409, 410].includes(e.status)) {
                         logger.warn(`[Achievement] Heartbeat rejected (HTTP ${e.status}). Falling back to bypass.`);
@@ -616,38 +604,26 @@ export class TaskRunner {
                         break;
                     }
                 }
-                await sleep(rnd(19000, 22000));
+                if (!await this.wait(t, rnd(19000, 22000))) return;
             }
 
-            if (cur >= t.target && this.runtime.running) return this.cb.onComplete(q, t);
+            if (cur >= t.target && this.isTaskActive(t)) return this.cb.onComplete(q, t);
         }
 
-        // heartbeat failed or skipped, so try the discordsays OAuth bypass
-        if (!this.runtime.running) return;
+        if (!this.isTaskActive(t)) return;
         const bypass = await this.bypassAchievement(q, t);
-        if (!this.runtime.running) return;
+        if (!this.isTaskActive(t)) return;
         if (bypass.ok) return this.cb.onComplete(q, t);
 
-        // A bypass that never ran because the consent toggle is off is not the same as one
-        // that ran and failed. Recorded separately so switching the toggle on returns the
-        // quest to the queue. Otherwise it stays in `skipped` for the life of the run and
-        // the setting looks like it did nothing.
         if (!settings.store.achievementBypass) {
             this.consentSkipped.add(q.id);
             return this.failTask(q, t, "Achievement bypass is off in settings");
         }
 
-        // both auto-paths failed: skip the quest. no more 25-min passive wait.
-        // The bypass records why it gave up, so pass that on instead of a bare
-        // "Cannot auto-complete", which left the status with nothing to act on.
         logger.warn(`[Task] Skipping "${t.name}". No auto-completion path worked (heartbeat rejected, bypass blocked). Likely age-gated/delisted on your account.`);
         return this.failTask(q, t, bypass.reason ?? "no auto-completion path worked");
     }
 
-    /**
-     * Return quests that were skipped only for want of consent, so the next cycle picks them
-     * up again. Called when the achievement bypass is switched on while the engine runs.
-     */
     retryConsentSkipped(): number {
         let restored = 0;
         for (const id of this.consentSkipped) if (this.skipped.delete(id)) restored++;
@@ -655,19 +631,6 @@ export class TaskRunner {
         return restored;
     }
 
-    /**
-     * Build a stream key in the shape Discord's own encoder produces.
-     *
-     * Discord joins the parts with a colon and the trailing component is the stream owner:
-     *   call:<channelId>:<ownerId>
-     *   guild:<guildId>:<channelId>:<ownerId>
-     * and its decoder destructures them back in exactly that order.
-     *
-     * Two things used to be wrong here. The owner slot carried `rnd(1000, 9999)`, so every
-     * heartbeat body advertised a four digit number where a user snowflake belongs, and a
-     * guild voice channel was still encoded with the `call:` prefix, which decodes as a DM
-     * channel id. Both are visible in the request body on every beat.
-     */
     private streamKey(): string | null {
         try {
             const ownerId = this.stores.UserStore?.getCurrentUser?.()?.id;
@@ -691,7 +654,6 @@ export class TaskRunner {
         }
     }
 
-    /** Filter quests for execution: exclude completed, expired, blacklisted, and previously-skipped. */
     activeQuests(quests: Quest[]): Quest[] {
         const now = Date.now();
         return quests.filter(q =>

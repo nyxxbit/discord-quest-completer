@@ -15,24 +15,17 @@ import { FluxDispatcher, RestAPI } from "@webpack/common";
 
 import { setAchievementBypassHook } from "./hooks";
 import { Patcher } from "./patcher";
+import { selectQuestTaskConfig } from "./questConfig";
 import { settings } from "./settings";
+import { TaskControlRegistry, type TaskLifecycle } from "./taskControl";
 import { TaskRunner } from "./tasks";
 import { isSkippableQuest, Traffic } from "./traffic";
 import type { OrionRuntime, Quest, Stores, TaskInfo, TaskType } from "./types";
 import { debug, rnd, sleep, trafficMetadataSealed } from "./util";
 
 const logger = new Logger("OrionQuests");
-
-// GAME/STREAM quests need the desktop process-injection path, so we skip them
-// silently when running in a browser context. Use Vencord's build-time globals
-// (IS_DISCORD_DESKTOP / IS_VESKTOP) instead of probing window.DiscordNative:
-// the preload global isn't reliably visible from the plugin's execution context,
-// which made the desktop build wrongly skip game quests (issue #35).
 const IS_DESKTOP = IS_DISCORD_DESKTOP || IS_VESKTOP;
 
-// Tiny Web Audio synth that mirrors the userscript's Sound module. 'tick'
-// fires after each quest completes; 'done' fires when the whole queue is
-// finished. Soft-fails on environments without AudioContext.
 const Sound = {
     play(type: "tick" | "done"): void {
         if (!settings.store.playSound) return;
@@ -58,11 +51,10 @@ const Sound = {
                 g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18);
                 o.start(t0); o.stop(t0 + 0.2);
             }
-        } catch (_) { /* audio unavailable, ignore */ }
+        } catch (_) { /* audio unavailable */ }
     }
 };
 
-// Status of a task as surfaced to UI consumers (dashboard, slash commands).
 export interface DashboardEntry {
     id: string;
     name: string;
@@ -72,12 +64,17 @@ export interface DashboardEntry {
     status: string;
     claimable?: boolean;
     actionRequired?: string | null;
-    /**
-     * Why a task ended the way it did. Only set for FAILED, where a bare status is useless:
-     * the reason already existed, went into the log, and was dropped before it reached
-     * `/orion status`, so anyone reading the status saw `FAILED (0%)` and had nothing to act on.
-     */
     reason?: string | null;
+}
+
+export interface QuestPauseResult {
+    changed: boolean;
+    cleanupFailures: number;
+}
+
+export interface QuestPauseAllResult {
+    changed: number;
+    cleanupFailures: number;
 }
 
 const RUNTIME: OrionRuntime = {
@@ -86,20 +83,21 @@ const RUNTIME: OrionRuntime = {
     skipped: new Set<string>(),
 };
 
-// RUNTIME is the public current-engine view. Every start also gets its own runtime object
-// and generation id so callbacks from a stopped run can never become current again merely
-// because a later run flips RUNTIME.running back to true.
 let nextRunId = 0;
 let activeRunId = 0;
 let activeRuntime: OrionRuntime | null = null;
+const taskControls = new TaskControlRegistry();
 
 const dashboard = new Map<string, DashboardEntry>();
 const dashboardListeners = new Set<() => void>();
 let stores: Stores | null = null;
 let patcher: Patcher | null = null;
-
 let traffic: Traffic | null = null;
 let tasks: TaskRunner | null = null;
+let questStore: any = null;
+let userStore: any = null;
+let sessionOwnerUserId: string | null = null;
+let accountResetInProgress = false;
 
 function isRunActive(runId: number, runRuntime: OrionRuntime): boolean {
     return RUNTIME.running
@@ -108,71 +106,196 @@ function isRunActive(runId: number, runRuntime: OrionRuntime): boolean {
         && activeRuntime === runRuntime;
 }
 
-/**
- * hideActivity is read live, but nothing re-read it between task boundaries: suppression is
- * recomputed only when a fake game is added or removed, and a game quest holds one for up to
- * 25 minutes. Vencord notifies us the moment the user clicks instead. The handler is
- * module-level so stopOrion can pass the same reference back to remove it.
- *
- * The path is resolved on use, never at module load: definePluginSettings leaves pluginName
- * empty and Vencord fills it in when it initialises the plugin, so a path built up here would
- * read "plugins..hideActivity" and the listener would never fire.
- */
+type ControlledTaskInfo = TaskInfo & { generation?: number; accountId?: string; };
+
+function isTaskActive(runId: number, runRuntime: OrionRuntime, t: ControlledTaskInfo): boolean {
+    if (t.accountId && getCurrentUserId() !== t.accountId) return false;
+    return t.generation != null
+        && isRunActive(runId, runRuntime)
+        && taskControls.isActive(t.id, t.generation);
+}
+
+async function waitForControlledTaskDelay(
+    runId: number,
+    runRuntime: OrionRuntime,
+    t: ControlledTaskInfo,
+    ms: number,
+): Promise<boolean> {
+    if (!isTaskActive(runId, runRuntime, t) || t.generation == null) return false;
+    const completed = await taskControls.waitForDelay(t.id, t.generation, ms);
+    return completed && isTaskActive(runId, runRuntime, t);
+}
+
+function logTaskCleanupError(questId: string, error: unknown): void {
+    logger.error(`[Task] Cleanup for quest ${questId} threw:`, error);
+}
+
 const hideActivityPath = () => `plugins.${settings.pluginName}.hideActivity`;
 const onHideActivityChanged = () => patcher?.syncPresenceSuppression();
 
-/** Public read access for the React dashboard component. */
 export function subscribeDashboard(fn: () => void): () => void {
     dashboardListeners.add(fn);
     return () => dashboardListeners.delete(fn);
 }
-export function readDashboard(): DashboardEntry[] {
-    return Array.from(dashboard.values());
-}
-/** Single source of truth for "is the engine up". index.tsx used to keep its own flag. */
-export function isEngineRunning(): boolean {
-    return RUNTIME.running;
-}
-function emitDashboard(): void {
-    for (const fn of dashboardListeners) {
-        try { fn(); } catch (e: any) { debug(logger, `[UI] listener threw: ${e?.message}`); }
-    }
-}
-function setEntry(id: string, partial: Partial<DashboardEntry> & { name: string; type: TaskType; cur: number; max: number; status: string; }): void {
-    // A stopped engine must never leave an in-flight status behind: mainLoop skips quests
-    // whose entry reads RUNNING, so a late poll landing after shutdown would lock that
-    // quest out of every future start. Terminal updates (COMPLETED/CLAIMED/FAILED) still
-    // get through, since those are results worth keeping.
-    if (!RUNTIME.running && (partial.status === "RUNNING" || partial.status === "QUEUE")) return;
 
-    const prev = dashboard.get(id) ?? { id, claimable: false, actionRequired: null, reason: null } as DashboardEntry;
-    // Entries merge over the previous value, so a reason from an earlier failure would ride
-    // along on the row after a retry and explain a state the quest is no longer in. It belongs
-    // to FAILED only, so anything else clears it unless the caller passes one explicitly.
-    const carried = partial.status === "FAILED" || "reason" in partial ? {} : { reason: null };
-    dashboard.set(id, { ...prev, id, ...partial, ...carried });
-    emitDashboard();
-}
-function removeEntry(id: string): void {
-    dashboard.delete(id);
-    emitDashboard();
-}
-
-let questStore: any = null;
-
-/**
- * QuestStore, resolved independently of the engine's lifetime. The enrollment watcher in
- * index.tsx needs the store while the engine is down, and the display name has been both
- * "QuestStore" and "QuestsStore" across builds, so the fallback lives in one place instead
- * of being copied into every caller. Resolved on first use, not at module load: findStore
- * walks the webpack cache, which is not populated when the plugin module is evaluated.
- */
 export function getQuestStore(): any {
     if (!questStore) questStore = findStore("QuestStore") || findStore("QuestsStore");
     return questStore;
 }
 
-/** Current quest list, for callers that only want to read it (the watcher). */
+export function getUserStore(): any {
+    if (!userStore) userStore = findStore("UserStore");
+    return userStore;
+}
+
+export function getCurrentUserId(): string | null {
+    try {
+        return getUserStore()?.getCurrentUser?.()?.id ?? null;
+    } catch {
+        return null;
+    }
+}
+
+function emitDashboard(): void {
+    for (const fn of dashboardListeners) {
+        try { fn(); } catch (e: any) { debug(logger, `[UI] listener threw: ${e?.message}`); }
+    }
+}
+
+function setEntry(id: string, partial: Partial<DashboardEntry> & { name: string; type: TaskType; cur: number; max: number; status: string; }): void {
+    if (!RUNTIME.running && (partial.status === "RUNNING" || partial.status === "QUEUE")) return;
+
+    const prev = dashboard.get(id) ?? { id, claimable: false, actionRequired: null, reason: null } as DashboardEntry;
+    const carried = partial.status === "FAILED" || "reason" in partial ? {} : { reason: null };
+    dashboard.set(id, { ...prev, id, ...partial, ...carried });
+    emitDashboard();
+}
+
+function removeEntry(id: string): void {
+    dashboard.delete(id);
+    emitDashboard();
+}
+
+/** Clear every object owned by the previous Discord account without observer re-entry. */
+export function resetForAccountChange(): void {
+    if (accountResetInProgress) return;
+    accountResetInProgress = true;
+
+    try {
+        // Observable account-owned state goes first. stopOrion() emits synchronously, and a
+        // dashboard subscriber is allowed to readDashboard() from that callback. Leaving the old
+        // owner/dashboard visible until after stop would make that read detect the same account
+        // mismatch and recursively enter this teardown while patcher/stores were still live.
+        sessionOwnerUserId = null;
+        taskControls.clearPaused();
+        dashboard.clear();
+
+        if (RUNTIME.running || activeRuntime || patcher || stores) stopOrion();
+        else emitDashboard();
+    } finally {
+        accountResetInProgress = false;
+    }
+}
+
+/** Lazy fallback for account transitions even if the UserStore listener is unavailable/delayed. */
+function reconcileSessionAccount(): string | null {
+    const current = getCurrentUserId();
+    if (!current) {
+        if (sessionOwnerUserId !== null && !accountResetInProgress) resetForAccountChange();
+        return null;
+    }
+
+    if (sessionOwnerUserId !== null && sessionOwnerUserId !== current && !accountResetInProgress) {
+        resetForAccountChange();
+    }
+    if (sessionOwnerUserId === null) sessionOwnerUserId = current;
+    return current;
+}
+
+export function readDashboard(): DashboardEntry[] {
+    reconcileSessionAccount();
+    return Array.from(dashboard.values());
+}
+
+export function isEngineRunning(): boolean {
+    // This is also a public/command-facing read. Reconcile here so an account switch cannot leave
+    // callers observing `true` during the gap before UserStore's change listener runs.
+    reconcileSessionAccount();
+    return RUNTIME.running;
+}
+
+export function isQuestPaused(questId: string): boolean {
+    reconcileSessionAccount();
+    return taskControls.isPaused(questId);
+}
+
+export function pauseQuest(questId: string): QuestPauseResult {
+    if (!reconcileSessionAccount()) return { changed: false, cleanupFailures: 0 };
+
+    const entry = dashboard.get(questId);
+    if (!entry || (entry.status !== "RUNNING" && entry.status !== "QUEUE")) {
+        return { changed: false, cleanupFailures: 0 };
+    }
+
+    const result = taskControls.pause(questId, error => logTaskCleanupError(questId, error));
+    if (!result) return { changed: false, cleanupFailures: 0 };
+
+    dashboard.set(questId, {
+        ...entry,
+        status: "PAUSED",
+        actionRequired: null,
+        reason: null,
+    });
+    emitDashboard();
+    return { changed: true, cleanupFailures: result.failed };
+}
+
+export function pauseAllQuests(): QuestPauseAllResult {
+    reconcileSessionAccount();
+    let changed = 0;
+    let cleanupFailures = 0;
+    const ids = Array.from(dashboard.values())
+        .filter(entry => entry.status === "RUNNING" || entry.status === "QUEUE")
+        .map(entry => entry.id);
+
+    for (const id of ids) {
+        const result = pauseQuest(id);
+        if (!result.changed) continue;
+        changed++;
+        cleanupFailures += result.cleanupFailures;
+    }
+    return { changed, cleanupFailures };
+}
+
+export function resumeQuest(questId: string): boolean {
+    reconcileSessionAccount();
+    if (!taskControls.resume(questId)) return false;
+
+    // Keep a visible/pauseable row until the scheduler creates the replacement generation.
+    // Removing it opened a window where Pause -> Resume -> Pause could not express the last
+    // Pause until the quest had already become RUNNING again. A QUEUE row with no TaskControl is
+    // intentionally interpreted below as "eligible for the next cycle".
+    const entry = dashboard.get(questId);
+    if (entry?.status === "PAUSED") {
+        dashboard.set(questId, {
+            ...entry,
+            status: "QUEUE",
+            actionRequired: null,
+            reason: null,
+        });
+        emitDashboard();
+    }
+    return true;
+}
+
+export function resumeAllQuests(): number {
+    reconcileSessionAccount();
+    const ids = taskControls.pausedIds();
+    let changed = 0;
+    for (const id of ids) if (resumeQuest(id)) changed++;
+    return changed;
+}
+
 export function listQuests(): Quest[] {
     return getQuestsArray(getQuestStore());
 }
@@ -183,31 +306,23 @@ function loadStores(): Stores {
     const StreamStore = findStore("ApplicationStreamingStore");
     const ChanStore = findStore("ChannelStore");
     const GuildChanStore = findStore("GuildChannelStore");
-    const UserStore = findStore("UserStore");
+    const UserStore = getUserStore();
     const Dispatcher = (FluxDispatcher as any) || findByProps("dispatch", "subscribe", "flushWaitQueue");
     const API = (RestAPI as any) || findByProps("get", "post", "del");
 
     if (!QuestStore) throw new Error("QuestStore not found");
     if (!RunStore) throw new Error("RunningGameStore not found");
+    if (!UserStore) throw new Error("UserStore not found");
     if (!Dispatcher) throw new Error("FluxDispatcher not found");
     if (!API) throw new Error("RestAPI not found");
 
     if (!StreamStore) logger.warn("StreamStore not found, STREAM quests will be limited");
     if (!ChanStore) logger.warn("ChannelStore not found, ACTIVITY quests may not find a channel");
     if (!GuildChanStore) logger.warn("GuildChannelStore not found, ACTIVITY guild fallback unavailable");
-    if (!UserStore) logger.warn("UserStore not found, STREAM and ACTIVITY quests cannot build a stream key");
 
     return { QuestStore, RunStore, StreamStore, ChanStore, GuildChanStore, UserStore, Dispatcher, API };
 }
 
-/**
- * When Discord has blocked quest enrollment for this account, as a Date, otherwise null.
- *
- * `QuestStore.questEnrollmentBlockedUntil` is populated from the same `/quests/@me` response
- * the client already fetches, so reading it costs nothing and adds no request. A block is the
- * clearest signal Discord gives that it has taken an interest in the account, and running on
- * through it is both futile and the worst thing to do about it.
- */
 function enrollmentBlockedUntil(questStoreForRun: any): Date | null {
     try {
         const raw = questStoreForRun?.questEnrollmentBlockedUntil;
@@ -219,31 +334,43 @@ function enrollmentBlockedUntil(questStoreForRun: any): Date | null {
     }
 }
 
-function getQuestsArray(questStore: any): Quest[] {
-    const q = questStore?.quests;
+function getQuestsArray(store: any): Quest[] {
+    const q = store?.quests;
     if (!q) return [];
     if (typeof q.values === "function") return Array.from(q.values()) as Quest[];
     if (Array.isArray(q)) return q as Quest[];
     return Object.values(q) as Quest[];
 }
 
-/** Run async tasks concurrently up to a specified limit, with stagger to avoid bursts. */
+interface ScheduledTask {
+    run: () => Promise<void>;
+    isActive: () => boolean;
+}
+
 async function runConcurrent(
-    taskFns: Array<() => Promise<any>>,
+    scheduled: ScheduledTask[],
     limit: number,
     runId: number,
     runRuntime: OrionRuntime,
-): Promise<any[]> {
-    const executing = new Set<Promise<any>>();
-    for (const fn of taskFns) {
+): Promise<void> {
+    const executing = new Set<Promise<void>>();
+
+    for (const task of scheduled) {
         if (!isRunActive(runId, runRuntime)) break;
-        const p = fn().finally(() => executing.delete(p));
+        if (!task.isActive()) continue;
+
+        let p!: Promise<void>;
+        p = task.run()
+            .catch(error => logger.error("[Task] Worker rejected unexpectedly:", error))
+            .finally(() => executing.delete(p));
         executing.add(p);
+
         await sleep(rnd(1500, 4000));
         if (!isRunActive(runId, runRuntime)) break;
-        if (executing.size >= limit) await Promise.race(executing);
+        if (executing.size >= Math.max(1, limit)) await Promise.race(executing);
     }
-    return Promise.allSettled(executing);
+
+    await Promise.all(executing);
 }
 
 async function onTaskComplete(
@@ -253,28 +380,24 @@ async function onTaskComplete(
     q: Quest,
     t: TaskInfo,
 ): Promise<void> {
-    if (!isRunActive(runId, runRuntime)) return;
+    const controlled = t as ControlledTaskInfo;
+    if (!isTaskActive(runId, runRuntime, controlled)) return;
 
     setEntry(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED" });
     logger.info(`[Task] Completed "${t.name}"!`);
     Sound.play("tick");
 
-    // browser notification
     try {
         if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            new Notification("Orion: Quest Completed", {
-                body: t.name,
-                tag: `orion-${q.id}`,
-            });
+            new Notification("Orion: Quest Completed", { body: t.name, tag: `orion-${q.id}` });
         }
     } catch (e: any) { debug(logger, `[Notification] ${e?.message}`); }
 
     if (settings.store.tryToClaimReward) {
         try {
-            await sleep(rnd(2500, 6000));
-            if (!isRunActive(runId, runRuntime)) return;
+            if (!await waitForControlledTaskDelay(runId, runRuntime, controlled, rnd(2500, 6000))) return;
             const claimRes: any = await runTasks.claimReward(q.id);
-            if (!isRunActive(runId, runRuntime)) return;
+            if (!isTaskActive(runId, runRuntime, controlled)) return;
             if (claimRes?.body?.claimed_at) {
                 logger.info(`[Claim] Reward for "${t.name}" claimed automatically!`);
                 setEntry(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "CLAIMED" });
@@ -285,17 +408,14 @@ async function onTaskComplete(
                 return;
             }
         } catch (e: any) {
-            if (!isRunActive(runId, runRuntime)) return;
+            if (!isTaskActive(runId, runRuntime, controlled)) return;
             const needsCaptcha = e?.body?.captcha_key || e?.body?.captcha_sitekey;
-            if (needsCaptcha) {
-                logger.warn(`[Claim] Captcha required for "${t.name}". Use Discord's UI button.`);
-            } else {
-                logger.error(`[Claim] Auto-claim failed for "${t.name}": ${e?.body?.message ?? e?.message}`);
-            }
+            if (needsCaptcha) logger.warn(`[Claim] Captcha required for "${t.name}". Use Discord's UI button.`);
+            else logger.error(`[Claim] Auto-claim failed for "${t.name}": ${e?.body?.message ?? e?.message}`);
         }
     }
 
-    if (isRunActive(runId, runRuntime)) {
+    if (isTaskActive(runId, runRuntime, controlled)) {
         setEntry(q.id, { name: t.name, type: t.type, cur: t.target, max: t.target, status: "COMPLETED", claimable: true });
     }
 }
@@ -306,16 +426,19 @@ async function mainLoop(
     runStores: Stores,
     runTasks: TaskRunner,
     runTraffic: Traffic,
+    runUserId: string,
 ): Promise<void> {
     let loopCount = 1;
     while (isRunActive(runId, runRuntime)) {
         try {
+            if (getCurrentUserId() !== runUserId) {
+                logger.warn("[System] Discord account changed while Orion was running. Stopping and clearing account-scoped session state.");
+                resetForAccountChange();
+                return;
+            }
+
             logger.info(`[Cycle] Starting loop #${loopCount}...`);
 
-            // Discord tells the client when the account may not enroll in anything, and the
-            // quest list carries the timestamp. Checked every cycle rather than once at start,
-            // because the block can land mid-run, and continuing past it means hammering an
-            // endpoint that is already refusing us.
             const blockedUntil = enrollmentBlockedUntil(runStores.QuestStore);
             if (blockedUntil) {
                 logger.error(`[System] Discord has blocked quest enrollment on this account until ${blockedUntil.toLocaleString()}. Stopping instead of retrying.`);
@@ -324,6 +447,17 @@ async function mainLoop(
 
             const all = getQuestsArray(runStores.QuestStore);
             const active = runTasks.activeQuests(all);
+            const activeIds = new Set(active.map(q => q.id));
+
+            for (const id of taskControls.prunePaused(activeIds)) {
+                if (dashboard.get(id)?.status === "PAUSED") removeEntry(id);
+            }
+
+            // A resumed quest is represented by QUEUE without a TaskControl until the scheduler
+            // reaches it. If it completed/expired before that happens, retire that intent row too.
+            for (const [id, entry] of Array.from(dashboard.entries())) {
+                if (entry.status === "QUEUE" && !taskControls.get(id) && !activeIds.has(id)) removeEntry(id);
+            }
 
             if (!active.length) {
                 logger.info("[System] All available quests are completed!");
@@ -331,16 +465,21 @@ async function mainLoop(
                 break;
             }
 
-            const queues: { video: Array<() => Promise<any>>; game: Array<() => Promise<any>>; } = { video: [], game: [] };
+            const queues: { video: ScheduledTask[]; game: ScheduledTask[]; } = { video: [], game: [] };
 
             for (const q of active) {
                 if (!isRunActive(runId, runRuntime)) break;
+
                 try {
-                    const cfg = q.config?.taskConfig ?? q.config?.taskConfigV2;
+                    if (taskControls.isPaused(q.id)) continue;
+                    if (taskControls.get(q.id)) continue;
+
+                    const cfg = selectQuestTaskConfig(q.config);
                     if (!cfg?.tasks || typeof cfg.tasks !== "object") {
                         logger.warn(`[Quest] ${q.id} has invalid task config. Skipping.`);
                         continue;
                     }
+
                     const detected = runTasks.detectType(cfg, q.config?.application?.id);
                     if (!detected) {
                         logger.warn(`[Quest] Unknown task type: ${q.config?.messages?.questName ?? q.id}`);
@@ -350,38 +489,36 @@ async function mainLoop(
                         logger.warn(`[Quest] "${q.config?.messages?.questName ?? q.id}" requires desktop app. Skipping.`);
                         continue;
                     }
+
                     const { type, keyName, target, appId } = detected;
                     if (target <= 0) {
                         logger.warn(`[Quest] Invalid target (${target}) for ${q.id}. Skipping.`);
                         continue;
                     }
-                    // GAME/STREAM impersonate a specific application. Without a real id the fake
-                    // process is unidentifiable and Discord silently never counts it, so skip loudly
-                    // instead of running a task that can't finish (issue #43).
                     if ((type === "GAME" || type === "STREAM") && !appId) {
                         logger.warn(`[Quest] "${q.config?.messages?.questName ?? q.id}" has no application id in its config, so the game cannot be spoofed. Skipping.`);
-                        // activeQuests() filters on the TaskRunner's set; the runtime set alone is
-                        // never read, so skipping there re-detects and re-warns every cycle forever.
                         runRuntime.skipped.add(q.id);
                         runTasks.skipped.add(q.id);
                         continue;
                     }
-                    const t: TaskInfo = {
+
+                    // RUNNING without a control is never expected after the worker recovery below,
+                    // so keep that guard strict. QUEUE is different: Resume intentionally leaves a
+                    // control-free QUEUE row so the next cycle can create its replacement generation.
+                    const existingStatus = dashboard.get(q.id)?.status;
+                    if (existingStatus === "RUNNING") continue;
+
+                    const t: ControlledTaskInfo = {
                         id: q.id,
                         appId: appId ?? 0,
                         name: q.config?.messages?.questName ?? "Unknown Quest",
-                        target, type, keyName,
+                        target,
+                        type,
+                        keyName,
+                        accountId: runUserId,
                     };
 
-                    // skip if already running
-                    if (dashboard.get(q.id)?.status === "RUNNING") continue;
-
-                    // Auto-enroll off means the user picks the quests: leave anything they
-                    // haven't accepted untouched and park it instead of queuing it. activeQuests
-                    // keeps unenrolled quests in the list, so the next cycle re-checks and queues
-                    // this one the moment they accept it in Discord, without a restart.
                     if (!q.userStatus?.enrolledAt && !settings.store.autoEnroll) {
-                        // announce the wait once, not on every rescan
                         if (dashboard.get(q.id)?.status !== "PENDING") {
                             logger.info(`[Enroll] Auto-enroll is off, waiting for you to accept "${t.name}" in Discord.`);
                         }
@@ -389,16 +526,13 @@ async function mainLoop(
                         continue;
                     }
 
-                    // actionRequired is sticky across updates, so clear it explicitly: a quest
-                    // parked on the last cycle and accepted since would otherwise keep telling
-                    // the UI to ask for something the user already did.
+                    const control = taskControls.create(q.id);
+                    t.generation = control.generation;
                     setEntry(t.id, { name: t.name, type: t.type, cur: 0, max: t.target, status: "QUEUE", actionRequired: null });
 
-                    const taskFn = async () => {
-                        if (!isRunActive(runId, runRuntime)) return;
+                    const executeTask = async () => {
+                        if (!isTaskActive(runId, runRuntime, t)) return;
 
-                        // JIT enrollment, only reached with auto-enroll on (the gate above
-                        // returns first otherwise) or when the user enrolled themselves
                         if (!q.userStatus?.enrolledAt) {
                             logger.info(`[Enroll] Accepting quest: ${t.name}`);
                             try {
@@ -407,12 +541,11 @@ async function mainLoop(
                                     is_targeted: false,
                                     metadata_sealed: null,
                                     traffic_metadata_sealed: trafficMetadataSealed(runStores.QuestStore, q.id),
-                                });
-                                await sleep(rnd(800, 1500));
-                                if (!isRunActive(runId, runRuntime)) return;
+                                }, () => isTaskActive(runId, runRuntime, t), control.controller.signal);
+                                if (!isTaskActive(runId, runRuntime, t)) return;
+                                if (!await waitForControlledTaskDelay(runId, runRuntime, t, rnd(800, 1500))) return;
                             } catch (e: any) {
-                                if (!isRunActive(runId, runRuntime)) return;
-                                // one definition of "this quest is gone", owned by traffic.ts
+                                if (!isTaskActive(runId, runRuntime, t)) return;
                                 if (isSkippableQuest(e)) {
                                     runRuntime.skipped.add(q.id);
                                     runTasks.skipped.add(q.id);
@@ -423,6 +556,8 @@ async function mainLoop(
                                 return runTasks.failTask(q, t, "Enrollment failed");
                             }
                         }
+
+                        if (!isTaskActive(runId, runRuntime, t)) return;
                         if (type === "WATCH_VIDEO") return runTasks.VIDEO(q, t, q.userStatus);
                         if (type === "ACHIEVEMENT") return runTasks.ACHIEVEMENT(q, t);
                         if (type === "STREAM") return runTasks.STREAM(q, t);
@@ -430,21 +565,58 @@ async function mainLoop(
                         return runTasks.GAME(q, t);
                     };
 
-                    if (type === "WATCH_VIDEO") queues.video.push(taskFn);
-                    else queues.game.push(taskFn);
+                    const scheduled: ScheduledTask = {
+                        isActive: () => isTaskActive(runId, runRuntime, t),
+                        run: async () => {
+                            if (!taskControls.markStarted(q.id, control.generation)) return;
+
+                            const work = executeTask().catch(error => {
+                                // A handler exception must not leave a RUNNING/QUEUE tombstone after
+                                // release() removes the control, because the next cycle would then
+                                // skip the quest forever. Cancellation is excluded by liveness, and
+                                // terminal results already written by a handler are left untouched.
+                                if (isTaskActive(runId, runRuntime, t)) {
+                                    const current = dashboard.get(q.id);
+                                    const terminal = current?.status === "COMPLETED"
+                                        || current?.status === "CLAIMED"
+                                        || current?.status === "FAILED";
+                                    if (!terminal) {
+                                        setEntry(q.id, {
+                                            name: t.name,
+                                            type: t.type,
+                                            cur: current?.cur ?? 0,
+                                            max: t.target,
+                                            status: "FAILED",
+                                            reason: "Unexpected task error; see console",
+                                        });
+                                        runRuntime.skipped.add(q.id);
+                                        runTasks.skipped.add(q.id);
+                                    }
+                                }
+                                throw error;
+                            });
+
+                            const settling = work.finally(() => {
+                                taskControls.release(q.id, control.generation, error => logTaskCleanupError(q.id, error));
+                            });
+                            await Promise.race([settling, control.cancelled]);
+                        },
+                    };
+
+                    if (type === "WATCH_VIDEO") queues.video.push(scheduled);
+                    else queues.game.push(scheduled);
                 } catch (e: any) {
-                    if (isRunActive(runId, runRuntime)) {
-                        logger.error(`[Quest] Error processing ${q.id}: ${e?.message}`);
-                    }
+                    if (isRunActive(runId, runRuntime)) logger.error(`[Quest] Error processing ${q.id}: ${e?.message}`);
                 }
             }
 
             const total = queues.video.length + queues.game.length;
             if (total > 0 && isRunActive(runId, runRuntime)) {
                 logger.info(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`);
-                const pGames = runConcurrent(queues.game, settings.store.gameConcurrency ?? 1, runId, runRuntime);
-                const pVideos = runConcurrent(queues.video, settings.store.videoConcurrency ?? 2, runId, runRuntime);
-                await Promise.all([pGames, pVideos]);
+                await Promise.all([
+                    runConcurrent(queues.game, settings.store.gameConcurrency ?? 1, runId, runRuntime),
+                    runConcurrent(queues.video, settings.store.videoConcurrency ?? 2, runId, runRuntime),
+                ]);
             } else if (isRunActive(runId, runRuntime)) {
                 await sleep(rnd(4000, 6000));
             }
@@ -470,52 +642,77 @@ export async function startOrion(): Promise<void> {
         return;
     }
 
+    // Reconcile account-owned session state before marking a new run active. Doing this after
+    // activeRunId/RUNTIME are published could make the reconciliation stop the brand-new run and
+    // then let its start continuation keep going.
+    const startingUserId = reconcileSessionAccount();
+    if (!startingUserId) {
+        logger.error("Cannot start OrionQuests: current Discord user is unavailable.");
+        return;
+    }
+
     const runId = ++nextRunId;
     const runRuntime: OrionRuntime = {
         running: true,
         cleanups: new Set<() => void>(),
         skipped: new Set<string>(),
     };
+
     activeRunId = runId;
     activeRuntime = runRuntime;
     RUNTIME.running = true;
     RUNTIME.cleanups = runRuntime.cleanups;
     RUNTIME.skipped = runRuntime.skipped;
 
-    // Drop finished/aborted rows from earlier runs. Pruned here rather than on stop so results
-    // stay readable after a run ends, but a fresh start never reports a previous session's tasks.
     for (const [id, e] of dashboard) {
-        if (e.status !== "RUNNING" && e.status !== "QUEUE") dashboard.delete(id);
+        if (e.status !== "RUNNING" && e.status !== "QUEUE" && e.status !== "PAUSED") dashboard.delete(id);
     }
     emitDashboard();
-
     logger.info("Starting OrionQuests");
 
     try {
         const runStores = loadStores();
-        // pass a getter, not a snapshot: the setting is toggleable mid-run
+        const runUserId = runStores.UserStore?.getCurrentUser?.()?.id ?? null;
+        if (!runUserId || runUserId !== startingUserId) {
+            throw new Error("Discord account changed while Orion was starting");
+        }
+
+        const taskLifecycle: TaskLifecycle = {
+            isActive: (questId, generation) =>
+                isRunActive(runId, runRuntime)
+                && getCurrentUserId() === runUserId
+                && taskControls.isActive(questId, generation),
+            signalFor: (questId, generation) => taskControls.signalFor(questId, generation),
+            addCleanup: (questId, generation, cleanup) =>
+                taskControls.addCleanup(questId, generation, cleanup),
+            removeCleanup: (questId, generation, cleanup) =>
+                taskControls.removeCleanup(questId, generation, cleanup),
+            waitForDelay: (questId, generation, ms) =>
+                taskControls.waitForDelay(questId, generation, ms),
+        };
+
         const runPatcher = new Patcher(runStores, () => !!settings.store.hideActivity);
         SettingsStore.addChangeListener(hideActivityPath(), onHideActivityChanged);
-        const runTraffic = new Traffic(runStores.API, () => isRunActive(runId, runRuntime));
+        const runTraffic = new Traffic(runStores.API, () => isRunActive(runId, runRuntime), {
+            warn: (...args) => logger.warn(...args),
+            error: (...args) => logger.error(...args),
+            debug: (...args) => debug(logger, ...args),
+        });
         let runTasks!: TaskRunner;
         runTasks = new TaskRunner(runStores, runTraffic, runPatcher, runRuntime, {
             onProgress: (id, info) => {
-                if (isRunActive(runId, runRuntime)) setEntry(id, info);
+                if (isRunActive(runId, runRuntime) && getCurrentUserId() === runUserId) setEntry(id, info);
             },
             onComplete: (q, t) => onTaskComplete(runId, runRuntime, runTasks, q, t),
-        });
+        }, taskLifecycle);
 
-        // Publish only the current run's objects for stopOrion and settings listeners. The loop
-        // and callbacks above retain their own references and never read a later run's globals.
         stores = runStores;
         patcher = runPatcher;
         traffic = runTraffic;
         tasks = runTasks;
 
-        // Turning the achievement bypass on mid-run should reach the quests it already
-        // refused, not just the ones detected after the flip.
         setAchievementBypassHook(enabled => {
-            if (!enabled || !isRunActive(runId, runRuntime)) return;
+            if (!enabled || !isRunActive(runId, runRuntime) || getCurrentUserId() !== runUserId) return;
             const restored = runTasks.retryConsentSkipped();
             if (restored > 0) logger.info(`[Settings] Achievement bypass enabled, retrying ${restored} skipped quest(s) on the next cycle.`);
         });
@@ -526,7 +723,7 @@ export async function startOrion(): Promise<void> {
             }
         } catch (e: any) { debug(logger, `[Notification] permission request failed: ${e?.message}`); }
 
-        await mainLoop(runId, runRuntime, runStores, runTasks, runTraffic);
+        await mainLoop(runId, runRuntime, runStores, runTasks, runTraffic, runUserId);
     } catch (e: any) {
         if (activeRunId === runId && activeRuntime === runRuntime) {
             logger.error("Fatal:", e);
@@ -536,7 +733,6 @@ export async function startOrion(): Promise<void> {
             debug(logger, `[Lifecycle] Stale run ${runId} exited after it had already been replaced: ${e?.message ?? e}`);
         }
     } finally {
-        // A stale invocation must never tear down a newer engine generation.
         if (activeRunId === runId && activeRuntime === runRuntime) stopOrion();
     }
 }
@@ -545,17 +741,21 @@ export function stopOrion(): void {
     const runRuntime = activeRuntime;
     if (!RUNTIME.running && !patcher && !stores && !runRuntime) return;
 
-    // Invalidate this generation before running cleanup. Any sleeping callback that resumes
-    // during teardown now sees its own runRuntime false and can never become active again when
-    // a later start creates a different runtime object.
     activeRunId = 0;
     activeRuntime = null;
     RUNTIME.running = false;
     if (runRuntime) runRuntime.running = false;
 
     let failed = 0;
+    taskControls.cancelAll(error => {
+        failed++;
+        logger.error("[Stop] Task cleanup threw:", error);
+    });
+
+    // Task-scoped cleanup lives only in TaskControlRegistry. This set is reserved for genuinely
+    // run-scoped/fallback cleanup, avoiding double ownership and double execution on Stop.
     const cleanups = runRuntime?.cleanups ?? RUNTIME.cleanups;
-    for (const cleanup of cleanups) {
+    for (const cleanup of Array.from(cleanups)) {
         try { cleanup(); }
         catch (e: any) { failed++; logger.error("Cleanup function threw:", e); }
     }
@@ -563,16 +763,8 @@ export function stopOrion(): void {
     RUNTIME.cleanups = new Set<() => void>();
     RUNTIME.skipped = new Set<string>();
 
-    // Detach before clean(): the listener holds the patcher, and a settings change arriving
-    // after teardown would re-enter a torn-down engine.
     SettingsStore.removeChangeListener(hideActivityPath(), onHideActivityChanged);
 
-    // Retire whatever was still in flight. Without this, a quest stopped part-way keeps a
-    // RUNNING entry in the registry, mainLoop's "already running" guard skips it on every
-    // later start, and the queue comes up empty while /orion status still reports it.
-    // PENDING goes with them: unlike COMPLETED it is an instruction rather than a result, and
-    // a stopped engine telling you to go accept a quest is telling you to do something that
-    // will have no effect until you start it again.
     for (const [id, e] of dashboard) {
         if (e.status === "RUNNING" || e.status === "QUEUE" || e.status === "PENDING") {
             dashboard.set(id, { ...e, status: "STOPPED", actionRequired: null });
@@ -580,8 +772,6 @@ export function stopOrion(): void {
     }
     emitDashboard();
 
-    // Drop the settings bridge with everything else it points at. A hook holding a
-    // torn-down TaskRunner is the same leak as any other module state outliving the engine.
     setAchievementBypassHook(null);
 
     try { patcher?.clean(); } catch (e: any) { logger.error("Patcher cleanup threw:", e); }

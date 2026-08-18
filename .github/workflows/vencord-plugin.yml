@@ -7,19 +7,11 @@ name: Vencord plugin build
 # silently stop the plugin from building. This job is the guard for that.
 
 on:
-  # so the build can be kicked off by hand on any branch, without waiting for a
-  # matching path change
   workflow_dispatch:
-  # The job builds against Vencord's default branch, so it doubles as a drift
-  # alarm: a weekly run catches an upstream change that breaks the plugin while
-  # nobody is touching this repo, instead of leaving it to a user bug report.
-  # Delete this block if the notifications aren't wanted - everything else still
-  # works. Note GitHub disables scheduled workflows after 60 days without a
-  # commit, and failure mail goes to whoever last edited the cron line.
   schedule:
     - cron: "0 6 * * 1" # Mondays, 06:00 UTC
   push:
-    branches: [main]
+    branches: [main, "feat/**", "fix/**"]
     paths:
       - "*.ts"
       - "*.tsx"
@@ -42,9 +34,6 @@ jobs:
           repository: Vendicated/Vencord
           path: vencord
 
-      # The repo root IS the plugin folder, so checking this repo out into
-      # src/userplugins/<name> is exactly what UserpluginInstaller's `git clone`
-      # produces on a user's machine.
       - name: Check out this repo as a userplugin
         uses: actions/checkout@v6
         with:
@@ -65,6 +54,24 @@ jobs:
         working-directory: vencord
         run: pnpm install --frozen-lockfile
 
+      - name: Test per-quest lifecycle
+        working-directory: vencord
+        run: |
+          pnpm exec tsx --test \
+            src/userplugins/discord-quest-completer/taskControl.test.ts \
+            src/userplugins/discord-quest-completer/questTarget.test.ts \
+            src/userplugins/discord-quest-completer/questConfig.test.ts \
+            src/userplugins/discord-quest-completer/traffic.test.ts \
+            src/userplugins/discord-quest-completer/oauthLifecycle.test.ts
+
+      - name: TypeScript
+        working-directory: vencord
+        run: pnpm testTsc
+
+      - name: Lint plugin
+        working-directory: vencord
+        run: pnpm lint src/userplugins/discord-quest-completer
+
       - name: Build
         working-directory: vencord
         run: pnpm run build
@@ -82,8 +89,11 @@ jobs:
           grep -q "OrionQuests" dist/vencordDesktopMain.js
           grep -q "discordsays" dist/vencordDesktopMain.js
 
-          # the slash command registered
+          # slash command and semantic enrollment wake-up are in the renderer bundle
           grep -q "Control the OrionQuests engine" dist/renderer.js
+          grep -q "Pause one quest" dist/renderer.js
+          grep -q "Resume one quest" dist/renderer.js
+          grep -q "QUESTS_ENROLL_SUCCESS" dist/renderer.js
 
           # index.js is the standalone userscript and must never be bundled
           if grep -q "orionLock" dist/renderer.js; then
