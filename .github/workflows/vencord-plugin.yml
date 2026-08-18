@@ -69,6 +69,10 @@ jobs:
         working-directory: vencord
         run: pnpm run build
 
+      - name: Type-check
+        working-directory: vencord
+        run: pnpm testTsc
+
       - name: Assert the plugin made it into the build
         working-directory: vencord
         run: |
@@ -82,8 +86,11 @@ jobs:
           grep -q "OrionQuests" dist/vencordDesktopMain.js
           grep -q "discordsays" dist/vencordDesktopMain.js
 
-          # the slash command registered
+          # the slash command and narrow companion control surface registered
           grep -q "Control the OrionQuests engine" dist/renderer.js
+          grep -q "getEngineRunning" dist/renderer.js
+          grep -q "subscribeEngineRunning" dist/renderer.js
+          grep -q "controlEngine" dist/renderer.js
 
           # index.js is the standalone userscript and must never be bundled
           if grep -q "orionLock" dist/renderer.js; then

@@ -11,7 +11,7 @@ import { ApplicationCommandInputType, ApplicationCommandOptionType, sendBotMessa
 import definePlugin from "@utils/types";
 
 import { setWatchForEnrollmentsHook } from "./hooks";
-import { getQuestStore, isEngineRunning, listQuests, readDashboard, startOrion, stopOrion } from "./orion";
+import { getQuestStore, isEngineRunning, listQuests, readDashboard, startOrion, stopOrion, subscribeDashboard } from "./orion";
 import { repairSuppressedPresence } from "./patcher";
 import { settings } from "./settings";
 
@@ -176,6 +176,22 @@ export default definePlugin({
     // off for the hideActivity setting.
     dependencies: ["UserSettingsAPI"],
     settings,
+
+    // Narrow companion surface for UI plugins. State comes directly from Orion's runtime,
+    // and control reuses the same watcher-aware start/stop paths as the slash command.
+    getEngineRunning(): boolean {
+        return isEngineRunning();
+    },
+
+    subscribeEngineRunning(listener: () => void): () => void {
+        return subscribeDashboard(listener);
+    },
+
+    async controlEngine(action: "start" | "stop"): Promise<string> {
+        if (action === "start") return ensureStart();
+        if (action === "stop") return ensureStop();
+        throw new Error(`Unsupported Orion engine action: ${String(action)}`);
+    },
 
     commands: [
         {
