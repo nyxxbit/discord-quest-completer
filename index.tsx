@@ -24,6 +24,7 @@ import {
     resumeQuest,
     startOrion,
     stopOrion,
+    subscribeDashboard,
 } from "./orion";
 import { repairSuppressedPresence } from "./patcher";
 import { resolveQuestTarget } from "./questTarget";
@@ -319,6 +320,59 @@ function ensureResume(rawTarget?: string): string {
         : `"${target.name}" is no longer paused.`;
 }
 
+async function ensureReadyPause(rawTarget?: string): Promise<string> {
+    await waitForPluginInitialization();
+    return ensurePause(rawTarget);
+}
+
+async function ensureReadyResume(rawTarget?: string): Promise<string> {
+    await waitForPluginInitialization();
+    return ensureResume(rawTarget);
+}
+
+type CompanionQuestState = "running" | "queued" | "paused" | "stopped";
+type CompanionControlSnapshot = {
+    running: boolean;
+    quests: Record<string, CompanionQuestState>;
+};
+
+function companionQuestState(status: string): CompanionQuestState | null {
+    if (status === "RUNNING") return "running";
+    if (status === "QUEUE") return "queued";
+    if (status === "PAUSED") return "paused";
+    if (status === "STOPPED") return "stopped";
+    return null;
+}
+
+function companionSnapshot(): CompanionControlSnapshot {
+    const quests: Record<string, CompanionQuestState> = {};
+    for (const entry of readDashboard()) {
+        const state = companionQuestState(entry.status);
+        if (state) quests[entry.id] = state;
+    }
+    return { running: isEngineRunning(), quests };
+}
+
+async function controlQuestById(questId: string, action: "pause" | "resume"): Promise<string> {
+    await waitForPluginInitialization();
+    const id = questId.trim();
+    if (!id) throw new Error("Quest id is required.");
+
+    const entry = readDashboard().find(candidate => candidate.id === id);
+    const name = entry?.name ?? id;
+
+    if (action === "pause") {
+        const result = pauseQuest(id);
+        if (!result.changed) return `"${name}" is no longer queued or running.`;
+        const warning = result.cleanupFailures > 0 ? ` ${result.cleanupFailures} cleanup(s) threw; see the console.` : "";
+        return `Paused "${name}".${warning}`;
+    }
+
+    return resumeQuest(id)
+        ? `Resumed "${name}"; it is eligible again on the next cycle.`
+        : `"${name}" is no longer paused.`;
+}
+
 export default definePlugin({
     name: "OrionQuests",
     description:
@@ -334,6 +388,44 @@ export default definePlugin({
             if (!event?.enrolledQuestUserStatus) return;
             onEnrollmentSuccess();
         },
+    },
+
+    // Stable companion surface for UI plugins. It exposes only lifecycle/control state and
+    // delegates every mutation back through Orion's own watcher-aware, generation-safe paths.
+    // The legacy engine-only methods stay available so older QuestUI builds remain compatible.
+    getEngineRunning(): boolean {
+        return isEngineRunning();
+    },
+
+    subscribeEngineRunning(listener: () => void): () => void {
+        return subscribeDashboard(listener);
+    },
+
+    getControlSnapshot(): CompanionControlSnapshot {
+        return companionSnapshot();
+    },
+
+    subscribeControlState(listener: () => void): () => void {
+        return subscribeDashboard(listener);
+    },
+
+    async controlEngine(action: "start" | "stop"): Promise<string> {
+        if (action === "start") return ensureReadyStart();
+        if (action === "stop") return ensureReadyStop();
+        throw new Error(`Unsupported Orion engine action: ${String(action)}`);
+    },
+
+    async controlAll(action: "pause" | "resume"): Promise<string> {
+        if (action === "pause") return ensureReadyPause();
+        if (action === "resume") return ensureReadyResume();
+        throw new Error(`Unsupported Orion global task action: ${String(action)}`);
+    },
+
+    async controlQuest(questId: string, action: "pause" | "resume"): Promise<string> {
+        if (action !== "pause" && action !== "resume") {
+            throw new Error(`Unsupported Orion quest action: ${String(action)}`);
+        }
+        return controlQuestById(questId, action);
     },
 
     commands: [
@@ -373,8 +465,8 @@ export default definePlugin({
                         response = "The quest option only applies to pause or resume.";
                     } else if (action === "start") response = await ensureReadyStart();
                     else if (action === "stop") response = await ensureReadyStop();
-                    else if (action === "pause") response = ensurePause(target);
-                    else if (action === "resume") response = ensureResume(target);
+                    else if (action === "pause") response = await ensureReadyPause(target);
+                    else if (action === "resume") response = await ensureReadyResume(target);
                     else response = statusSummary();
                 } catch (error) {
                     response = `Control unavailable: ${error instanceof Error ? error.message : String(error)}`;

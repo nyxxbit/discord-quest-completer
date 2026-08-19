@@ -89,11 +89,17 @@ jobs:
           grep -q "OrionQuests" dist/vencordDesktopMain.js
           grep -q "discordsays" dist/vencordDesktopMain.js
 
-          # slash command and semantic enrollment wake-up are in the renderer bundle
+          # slash command, semantic enrollment wake-up and the narrow companion surface are bundled
           grep -q "Control the OrionQuests engine" dist/renderer.js
           grep -q "Pause one quest" dist/renderer.js
           grep -q "Resume one quest" dist/renderer.js
           grep -q "QUESTS_ENROLL_SUCCESS" dist/renderer.js
+          grep -q "getControlSnapshot" dist/renderer.js
+          grep -q "subscribeControlState" dist/renderer.js
+          grep -q "controlAll" dist/renderer.js
+          grep -q "controlQuest" dist/renderer.js
+          grep -q "Unsupported Orion global task action" dist/renderer.js
+          grep -q "Unsupported Orion quest action" dist/renderer.js
 
           # index.js is the standalone userscript and must never be bundled
           if grep -q "orionLock" dist/renderer.js; then
