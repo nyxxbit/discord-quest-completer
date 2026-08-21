@@ -127,6 +127,9 @@ function armAccountWatcher(): void {
     knownAccountId = getCurrentUserId();
     onCurrentUserChanged = () => {
         const current = getCurrentUserId();
+        // A transient null means the identity is unknown, not that a different user was observed.
+        // Keep the last confirmed account id until UserStore gives us another non-null identity.
+        if (current == null) return;
         if (current === knownAccountId) return;
         knownAccountId = current;
 

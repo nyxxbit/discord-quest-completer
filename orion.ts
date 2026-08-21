@@ -13,6 +13,7 @@ import { Logger } from "@utils/Logger";
 import { findByProps, findStore } from "@webpack";
 import { FluxDispatcher, RestAPI } from "@webpack/common";
 
+import { isConfirmedDifferentAccount } from "./accountIdentity";
 import { setAchievementBypassHook } from "./hooks";
 import { Patcher } from "./patcher";
 import { selectQuestTaskConfig } from "./questConfig";
@@ -109,7 +110,7 @@ function isRunActive(runId: number, runRuntime: OrionRuntime): boolean {
 type ControlledTaskInfo = TaskInfo & { generation?: number; accountId?: string; };
 
 function isTaskActive(runId: number, runRuntime: OrionRuntime, t: ControlledTaskInfo): boolean {
-    if (t.accountId && getCurrentUserId() !== t.accountId) return false;
+    if (t.accountId && isConfirmedDifferentAccount(getCurrentUserId(), t.accountId)) return false;
     return t.generation != null
         && isRunActive(runId, runRuntime)
         && taskControls.isActive(t.id, t.generation);
@@ -200,10 +201,9 @@ export function resetForAccountChange(): void {
 /** Lazy fallback for account transitions even if the UserStore listener is unavailable/delayed. */
 function reconcileSessionAccount(): string | null {
     const current = getCurrentUserId();
-    if (!current) {
-        if (sessionOwnerUserId !== null && !accountResetInProgress) resetForAccountChange();
-        return null;
-    }
+    // null only means the identity is unknown at this observation point. Do not destroy a healthy
+    // session until Discord gives us a different confirmed non-null user id.
+    if (!current) return null;
 
     if (sessionOwnerUserId !== null && sessionOwnerUserId !== current && !accountResetInProgress) {
         resetForAccountChange();
@@ -268,7 +268,7 @@ export function pauseAllQuests(): QuestPauseAllResult {
 }
 
 export function resumeQuest(questId: string): boolean {
-    reconcileSessionAccount();
+    if (!reconcileSessionAccount()) return false;
     if (!taskControls.resume(questId)) return false;
 
     // Keep a visible/pauseable row until the scheduler creates the replacement generation.
@@ -289,7 +289,7 @@ export function resumeQuest(questId: string): boolean {
 }
 
 export function resumeAllQuests(): number {
-    reconcileSessionAccount();
+    if (!reconcileSessionAccount()) return 0;
     const ids = taskControls.pausedIds();
     let changed = 0;
     for (const id of ids) if (resumeQuest(id)) changed++;
@@ -431,7 +431,14 @@ async function mainLoop(
     let loopCount = 1;
     while (isRunActive(runId, runRuntime)) {
         try {
-            if (getCurrentUserId() !== runUserId) {
+            const currentUserId = getCurrentUserId();
+            if (currentUserId == null) {
+                // Unknown identity is not an account switch. Do not schedule fresh work until
+                // UserStore gives us a confirmed user again, but keep the healthy run/session.
+                await sleep(1000);
+                continue;
+            }
+            if (currentUserId !== runUserId) {
                 logger.warn("[System] Discord account changed while Orion was running. Stopping and clearing account-scoped session state.");
                 resetForAccountChange();
                 return;
@@ -680,7 +687,7 @@ export async function startOrion(): Promise<void> {
         const taskLifecycle: TaskLifecycle = {
             isActive: (questId, generation) =>
                 isRunActive(runId, runRuntime)
-                && getCurrentUserId() === runUserId
+                && !isConfirmedDifferentAccount(getCurrentUserId(), runUserId)
                 && taskControls.isActive(questId, generation),
             signalFor: (questId, generation) => taskControls.signalFor(questId, generation),
             addCleanup: (questId, generation, cleanup) =>
