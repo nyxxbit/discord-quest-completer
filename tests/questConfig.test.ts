@@ -1,13 +1,13 @@
 /*
  * OrionQuests task-config compatibility regression tests.
  * Run from a Vencord checkout:
- * pnpm exec tsx --test src/userplugins/discord-quest-completer/questConfig.test.ts
+ * pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/questConfig.test.ts
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { selectQuestTaskConfig, taskEntries, taskForKey } from "./questConfig";
+import { selectQuestTaskConfig, taskEntries, taskForKey } from "../questConfig";
 
 test("taskConfigV2 wins when Discord keeps both current and legacy configs", () => {
     const legacy = { tasks: { PLAY_ON_DESKTOP: { target: 10 } } };

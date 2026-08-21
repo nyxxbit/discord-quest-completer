@@ -1,13 +1,13 @@
 /*
  * OrionQuests OAuth cleanup regression tests.
  * Run from a Vencord checkout:
- * pnpm exec tsx --test src/userplugins/discord-quest-completer/oauthLifecycle.test.ts
+ * pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/oauthLifecycle.test.ts
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { cleanupCreatedOAuthGrants } from "./oauthLifecycle";
+import { cleanupCreatedOAuthGrants } from "../oauthLifecycle";
 
 function deferred<T>() {
     let resolve!: (value: T | PromiseLike<T>) => void;

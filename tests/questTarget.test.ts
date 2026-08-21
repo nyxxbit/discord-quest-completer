@@ -1,13 +1,13 @@
 /*
  * OrionQuests quest-target regression tests.
  * Run from a Vencord checkout:
- * pnpm exec tsx --test src/userplugins/discord-quest-completer/questTarget.test.ts
+ * pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/questTarget.test.ts
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { resolveQuestTarget } from "./questTarget";
+import { resolveQuestTarget } from "../questTarget";
 
 const candidates = [
     { id: "100", name: "Where Winds Meet" },

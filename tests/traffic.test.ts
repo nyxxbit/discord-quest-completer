@@ -1,13 +1,13 @@
 /*
  * OrionQuests per-request cancellation regression tests.
  * Run from a Vencord checkout:
- * pnpm exec tsx --test src/userplugins/discord-quest-completer/traffic.test.ts
+ * pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/traffic.test.ts
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Traffic } from "./traffic";
+import { Traffic } from "../traffic";
 
 function deferred<T = void>() {
     let resolve!: (value: T | PromiseLike<T>) => void;

@@ -15,12 +15,14 @@ on:
     paths:
       - "*.ts"
       - "*.tsx"
+      - "tests/**/*.ts"
       - ".github/workflows/vencord-plugin.yml"
   pull_request:
     branches: [main]
     paths:
       - "*.ts"
       - "*.tsx"
+      - "tests/**/*.ts"
       - ".github/workflows/vencord-plugin.yml"
 
 jobs:
@@ -56,13 +58,7 @@ jobs:
 
       - name: Test per-quest lifecycle
         working-directory: vencord
-        run: |
-          pnpm exec tsx --test \
-            src/userplugins/discord-quest-completer/taskControl.test.ts \
-            src/userplugins/discord-quest-completer/questTarget.test.ts \
-            src/userplugins/discord-quest-completer/questConfig.test.ts \
-            src/userplugins/discord-quest-completer/traffic.test.ts \
-            src/userplugins/discord-quest-completer/oauthLifecycle.test.ts
+        run: pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/*.test.ts
 
       - name: TypeScript
         working-directory: vencord

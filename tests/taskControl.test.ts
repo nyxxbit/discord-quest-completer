@@ -1,13 +1,13 @@
 /*
  * OrionQuests per-quest lifecycle regression tests.
  * Run from a Vencord checkout:
- * pnpm exec tsx --test src/userplugins/discord-quest-completer/taskControl.test.ts
+ * pnpm exec tsx --test src/userplugins/discord-quest-completer/tests/taskControl.test.ts
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { TaskControlRegistry, waitForTaskDelay } from "./taskControl";
+import { TaskControlRegistry, waitForTaskDelay } from "../taskControl";
 
 test("pausing one quest cancels only that generation and its cleanup", async () => {
     const registry = new TaskControlRegistry();
