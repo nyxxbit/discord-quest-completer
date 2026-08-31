@@ -1,0 +1,74 @@
+name: Installer regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "feat/**", "fix/**"]
+    paths:
+      - "tools/orion-devbuild-installer/**"
+      - "tools/orion-vencord-bundle/**"
+      - "tools/package-release.ps1"
+      - "tools/tests/installer-regression.ps1"
+      - ".github/workflows/installer.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/orion-devbuild-installer/**"
+      - "tools/orion-vencord-bundle/**"
+      - "tools/package-release.ps1"
+      - "tools/tests/installer-regression.ps1"
+      - ".github/workflows/installer.yml"
+
+jobs:
+  windows-installer:
+    name: Windows installer / Node ${{ matrix.node }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24", "25"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Parse scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $failed = $false
+          Get-ChildItem tools -Recurse -Filter *.ps1 | ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+              foreach ($error in $errors) {
+                  Write-Error "$($_.FullName):$($error.Extent.StartLineNumber): $($error.Message)"
+                  $failed = $true
+              }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run regression suite with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tools\tests\installer-regression.ps1
+
+      - name: Parse scripts with PowerShell 7
+        shell: pwsh
+        run: |
+          $failed = $false
+          Get-ChildItem tools -Recurse -Filter *.ps1 | ForEach-Object {
+              $tokens = $null
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+              foreach ($error in $errors) {
+                  Write-Error "$($_.FullName):$($error.Extent.StartLineNumber): $($error.Message)"
+                  $failed = $true
+              }
+          }
+          if ($failed) { exit 1 }
+
+      - name: Run regression suite with PowerShell 7
+        shell: pwsh
+        run: .\tools\tests\installer-regression.ps1
