@@ -1,4 +1,5 @@
 @echo off
+setlocal
 title Orion Quests - Installer
 color 0B
 echo.
@@ -22,9 +23,13 @@ if not exist "%APPDATA%\Vencord\dist\" (
     exit /b 1
 )
 
-:: 2) Close Discord before copying
+:: 2) Close Discord before copying. Vencord keeps one shared dist folder for every
+::    branch, so a running Canary or PTB locks the same files Stable would - close
+::    all three, and remember which ones were open so we reopen exactly those.
 echo  [1/4] Closing Discord...
-taskkill /F /IM Discord.exe >nul 2>&1
+call :stopFlavor Discord
+call :stopFlavor DiscordCanary
+call :stopFlavor DiscordPTB
 taskkill /F /IM DiscordSystemHelper.exe >nul 2>&1
 ping -n 3 127.0.0.1 >nul
 
@@ -38,14 +43,17 @@ if errorlevel 1 (
     color 0C
     echo.
     echo  ERROR copying the files. Make sure you extracted the whole zip
-    echo  (the "dist" folder has to sit right next to this .cmd).
+    echo  ^(the "dist" folder has to sit right next to this .cmd^).
     pause
     exit /b 1
 )
 
-:: 4) Reopen Discord
+:: 4) Reopen whatever we closed
 echo  [3/4] Reopening Discord...
-start "" "%LOCALAPPDATA%\Discord\Update.exe" --processStart Discord.exe
+call :startFlavor Discord
+call :startFlavor DiscordCanary
+call :startFlavor DiscordPTB
+if not defined ORION_STARTED call :startFallback
 ping -n 5 127.0.0.1 >nul
 
 echo  [4/4] Done!
@@ -67,3 +75,42 @@ echo     /orion stop     -- stop
 echo     /orion status   -- see progress
 echo.
 pause
+exit /b 0
+
+
+:: ── helpers ───────────────────────────────────────────────────
+
+:: Close one Discord build if it is running, and remember that it was.
+:stopFlavor
+tasklist /FI "IMAGENAME eq %~1.exe" 2>nul | find /I "%~1.exe" >nul
+if errorlevel 1 goto :eof
+set "ORION_WASRUNNING_%~1=1"
+taskkill /F /IM %~1.exe >nul 2>&1
+goto :eof
+
+:: Reopen one build, but only the ones we closed ourselves - a Stable-only user
+:: should not end up with Canary launched at them.
+:startFlavor
+if not defined ORION_WASRUNNING_%~1 goto :eof
+if not exist "%LOCALAPPDATA%\%~1\Update.exe" goto :eof
+start "" "%LOCALAPPDATA%\%~1\Update.exe" --processStart %~1.exe
+set "ORION_STARTED=1"
+goto :eof
+
+:: Discord was already closed before this ran, so there is nothing to put back.
+:: Start it anyway when only one build is installed and the choice is obvious.
+:startFallback
+set "ORION_ONLY="
+set "ORION_COUNT=0"
+for %%F in (Discord DiscordCanary DiscordPTB) do (
+    if exist "%LOCALAPPDATA%\%%F\Update.exe" (
+        set /a ORION_COUNT+=1
+        set "ORION_ONLY=%%F"
+    )
+)
+if "%ORION_COUNT%"=="1" (
+    start "" "%LOCALAPPDATA%\%ORION_ONLY%\Update.exe" --processStart %ORION_ONLY%.exe
+    goto :eof
+)
+echo        Discord was not running, so it was not reopened - open it yourself.
+goto :eof
