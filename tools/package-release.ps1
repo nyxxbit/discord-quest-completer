@@ -12,15 +12,22 @@
       (issue #39); --standalone alone is worse, its HTTP updater silently reverts the dist to
       vanilla and deletes the plugin. Only both flags together are safe for a copy-in-place
       install, and the only way to tell is the banner at the top of dist/patcher.js.
+    - the bundle must come from a clean Vencord source tree whose src/userplugins contains
+      no userplugin source except orionQuests. This is deliberately stricter than trying to
+      predict Vencord's target filtering: renderer plugin discovery and native discovery are
+      separate build paths, so absence of foreign source is the simple provenance invariant.
     - the devbuild installer ships a copy of the plugin sources, which moved to the repo root
       in v4.9.7 so UserpluginInstaller can clone the repo directly (#42)
 
-  Run from anywhere. Does not build Vencord: point -BundleDist at a dist/ you already built
-  with `pnpm build --standalone --disable-updater`, or skip the bundle with -SkipBundle.
+  Run from anywhere. For a bundle, -BundleDist must point at the dist directory inside the
+  clean Vencord source tree that produced it. -BundleSource may name that source root
+  explicitly; otherwise it is inferred as the parent of -BundleDist. Skip the bundle with
+  -SkipBundle.
 #>
 [CmdletBinding()]
 param(
     [string] $BundleDist,
+    [string] $BundleSource,
     [switch] $SkipBundle
 )
 
@@ -42,13 +49,13 @@ Info "Version from index.js: $Version"
 $checks = @(
     # The README carries the version in its badge only. It used to repeat it in the headline
     # too, until that line went with the rewrite that pulled the marketing voice out.
-    @{ File = 'README.md';                              Pattern = "badge/$Version-5865F2" }
-    @{ File = 'docs/VENCORD-PLUGIN.md';                 Pattern = "in sync with userscript $Version" }
-    @{ File = 'docs/ARCHITECTURE.md';                   Pattern = "Last reviewed against .index\.js. \*\*$Version\*\*" }
+    @{ File = 'README.md';                                Pattern = "badge/$Version-5865F2" }
+    @{ File = 'docs/VENCORD-PLUGIN.md';                   Pattern = "in sync with userscript $Version" }
+    @{ File = 'docs/ARCHITECTURE.md';                     Pattern = "Last reviewed against .index\.js. \*\*$Version\*\*" }
     @{ File = 'tools/orion-devbuild-installer/README.txt'; Pattern = "Version: $Version" }
     # The plugin carries its own version since v4.10.7. Before that a plugin user could not say
     # which build a bug report came from, and neither could anyone triaging it (issue #66).
-    @{ File = 'index.tsx';                              Pattern = "PLUGIN_VERSION = ""$Version""" }
+    @{ File = 'index.tsx';                                Pattern = "PLUGIN_VERSION = ""$Version""" }
 )
 $drift = @()
 foreach ($c in $checks) {
@@ -78,42 +85,83 @@ $staged = (Get-ChildItem $stage -File).Count
 if ($staged -lt 9) { Die "only $staged plugin files staged, expected the full set" }
 Good "$staged files staged"
 
-# ---- 3. the Tier 1 bundle must be a standalone, updater-disabled build -----------
+# ---- 3. the Tier 1 bundle must be a clean standalone, updater-disabled build -----
 if (-not $SkipBundle) {
+    if ([string]::IsNullOrWhiteSpace($BundleDist)) {
+        Die "bundle packaging requires -BundleDist <clean Vencord clone>\dist so the source userplugin set can be verified"
+    }
+
+    try { $bundleDistFull = (Resolve-Path -LiteralPath $BundleDist -ErrorAction Stop).Path }
+    catch { Die "BundleDist '$BundleDist' does not exist" }
+
+    if ($BundleSource) {
+        try { $sourceRoot = (Resolve-Path -LiteralPath $BundleSource -ErrorAction Stop).Path }
+        catch { Die "BundleSource '$BundleSource' does not exist" }
+    } else {
+        $sourceRoot = Split-Path -Parent $bundleDistFull
+    }
+
+    $expectedDist = [IO.Path]::GetFullPath((Join-Path $sourceRoot 'dist')).TrimEnd('\', '/')
+    $actualDist = [IO.Path]::GetFullPath($bundleDistFull).TrimEnd('\', '/')
+    if (-not $actualDist.Equals($expectedDist, [StringComparison]::OrdinalIgnoreCase)) {
+        Die "BundleDist must be the dist directory inside BundleSource. Expected '$expectedDist', got '$actualDist'."
+    }
+
+    $userplugins = Join-Path $sourceRoot 'src\userplugins'
+    $orionEntry = Join-Path $userplugins 'orionQuests\index.tsx'
+    if (-not (Test-Path -LiteralPath $orionEntry -PathType Leaf)) {
+        Die "clean bundle source is missing src\userplugins\orionQuests\index.tsx"
+    }
+
+    # This is a source-provenance rule, not a prediction that every extra entry would
+    # necessarily reach every output. Renderer discovery skips some names, but Vencord's
+    # native discovery scans every userplugin entry for native.ts. Therefore do not exempt
+    # '_' or '.' names here: a hidden/disabled-looking directory can still affect patcher.js.
+    # index.ts is the only non-plugin infrastructure file Vencord's renderer explicitly skips;
+    # as a file it cannot itself contain <entry>/native.ts, so it is safe to permit.
+    $extraUserPluginSources = @()
+    if (Test-Path -LiteralPath $userplugins -PathType Container) {
+        $extraUserPluginSources = @(Get-ChildItem -LiteralPath $userplugins -Force | Where-Object {
+            if ($_.Name -eq 'orionQuests') { $false }
+            elseif (-not $_.PSIsContainer -and $_.Name -eq 'index.ts') { $false }
+            else { $true }
+        })
+    }
+    if ($extraUserPluginSources.Count -gt 0) {
+        $names = $extraUserPluginSources.Name -join ', '
+        Die "bundle source is not clean; additional Vencord userplugin entries are present: $names. Use a clean clone containing only src\userplugins\orionQuests (plus an optional root index.ts infrastructure file) before building."
+    }
+    Good "bundle source provenance is clean: only orionQuests userplugin source is present"
+
     $bundleDir = Join-Path $Tools 'orion-vencord-bundle'
     $dist = Join-Path $bundleDir 'dist'
-    if ($BundleDist) {
-        Info "Refreshing the bundle dist from $BundleDist ..."
-        if (-not (Test-Path (Join-Path $BundleDist 'patcher.js'))) { Die "$BundleDist has no patcher.js" }
-        if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
-        New-Item -ItemType Directory -Force -Path $dist | Out-Null
-        Get-ChildItem $BundleDist -File | Where-Object { $_.Name -notlike '*.map' } | ForEach-Object { Copy-Item $_.FullName $dist }
+    $requiredDesktopFiles = @('patcher.js', 'preload.js', 'renderer.js', 'renderer.css')
+
+    Info "Refreshing the bundle dist from $bundleDistFull ..."
+    foreach ($name in $requiredDesktopFiles) {
+        $candidate = Join-Path $bundleDistFull $name
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf) -or (Get-Item -LiteralPath $candidate).Length -le 0) {
+            Die "$bundleDistFull is incomplete: required Discord Vencord runtime file '$name' is missing or empty"
+        }
     }
-    if (-not (Test-Path (Join-Path $dist 'patcher.js'))) { Die "no bundle dist. Build it with 'pnpm build --standalone --disable-updater' and pass -BundleDist <clone>\dist" }
+    if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    Get-ChildItem $bundleDistFull -File | Where-Object { $_.Name -notlike '*.map' } | ForEach-Object { Copy-Item $_.FullName $dist }
+
+    foreach ($name in $requiredDesktopFiles) {
+        $candidate = Join-Path $dist $name
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf) -or (Get-Item -LiteralPath $candidate).Length -le 0) {
+            Die "bundle dist is incomplete: '$name' is missing or empty. Build Vencord with 'pnpm build --standalone --disable-updater' and pass the complete dist with -BundleDist."
+        }
+    }
 
     # the banner is a few `//` lines and the order isn't fixed (Standalone, Platform,
     # Updater Disabled), so read past all of them rather than assuming a line count
     $banner = (Get-Content (Join-Path $dist 'patcher.js') -TotalCount 10) -join "`n"
-    if ($banner -notmatch 'Standalone:\s*true')      { Die "bundle dist is NOT a --standalone build. It would break Vencord's updater (#39)." }
-    if ($banner -notmatch 'Updater Disabled:\s*true'){ Die "bundle dist is NOT --disable-updater. Its HTTP updater would revert the dist to vanilla and delete the plugin (#39)." }
+    if ($banner -notmatch 'Standalone:\s*true')       { Die "bundle dist is NOT a --standalone build. It would break Vencord's updater (#39)." }
+    if ($banner -notmatch 'Updater Disabled:\s*true') { Die "bundle dist is NOT --disable-updater. Its HTTP updater would revert the dist to vanilla and delete the plugin (#39)." }
     if (-not (Select-String -Path (Join-Path $dist 'renderer.js') -Pattern 'OrionQuests' -SimpleMatch -Quiet)) { Die "the plugin is not in the bundle dist" }
-
-    # The bundle is built from whatever userplugins the source clone happens to hold, so any
-    # third-party plugin sitting beside ours gets compiled into the dist and shipped inside an
-    # artifact we distribute under our own licence. That happened in v4.9.9 and v4.10.0, which
-    # went out carrying a GPL-3.0 plugin. Refuse rather than trust the clone to be clean.
-    $foreign = @(
-        @{ Name = 'QuestUI'; Marker = 'renderQuestButtonTopBar' }
-    )
-    $renderers = Get-ChildItem $dist -File | Where-Object { $_.Name -match '^(vencordDesktop)?[Rr]enderer\.js$' }
-    foreach ($f in $foreign) {
-        foreach ($r in $renderers) {
-            if (Select-String -Path $r.FullName -Pattern $f.Marker -SimpleMatch -Quiet) {
-                Die "$($f.Name) is compiled into $($r.Name). Move it out of <clone>\src\userplugins before building the bundle dist; we must not redistribute someone else's plugin inside ours."
-            }
-        }
-    }
-    Good "bundle dist is standalone + updater-disabled, contains our plugin and no foreign one"
+    Good "bundle dist is complete, standalone + updater-disabled, contains OrionQuests, and came from the required clean source tree"
 
     # The bundle is a compiled Vencord, which is GPL-3.0-or-later, so conveying it means
     # shipping the licence text and saying where the corresponding source is. That was missing
