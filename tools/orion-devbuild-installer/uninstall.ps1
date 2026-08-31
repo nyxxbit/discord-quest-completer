@@ -1,37 +1,39 @@
 <#
   Uninstall the Orion Quests "auto-update edition".
 
-  Robust because the friend may have already deleted the OrionVencord clone (which would
-  brick Discord, since its app.asar stub require()s the clone's patcher.js). So we do NOT
-  depend on the clone: we restore Discord's original app.asar directly, for every flavor,
-  but only where the stub actually points at OUR OrionVencord install.
+  This does not depend on the OrionVencord clone surviving: it restores Discord's
+  original app.asar directly for every supported flavor, but only where the stub
+  actually points at this OrionVencord install.
 #>
 $ErrorActionPreference = 'Continue'
 $InstallDir = Join-Path $env:LOCALAPPDATA 'OrionVencord'
 
-Write-Host "Orion Quests - uninstalling the auto-update edition..." -ForegroundColor Cyan
+$Common = Join-Path $PSScriptRoot 'installer-common.ps1'
+if (-not (Test-Path -LiteralPath $Common -PathType Leaf)) {
+    Write-Host 'installer-common.ps1 is missing. Re-download/extract the full installer zip.' -ForegroundColor Red
+    try { Read-Host 'Press Enter to close' } catch {}
+    exit 1
+}
+. $Common
 
-# 1. close every Discord flavor + Squirrel updater, wait for them to actually exit
-Get-Process Discord, DiscordCanary, DiscordPTB, DiscordSystemHelper, Update -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-$deadline = (Get-Date).AddSeconds(15)
-while (((Get-Process Discord, DiscordCanary, DiscordPTB -ErrorAction SilentlyContinue) | Measure-Object).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+function Fail($m) {
+    Write-Host "ERROR: $m" -ForegroundColor Red
+    try { Read-Host 'Press Enter to close' } catch {}
+    exit 1
+}
 
-# 2. (No pnpm/CLI uninject step on purpose: Vencord's installer CLI is interactive and would stall
-#     on a friend's console waiting for arrow-key input, and all it does is restore app.asar - which
-#     the clone-independent step below does directly, without needing Node or the clone to survive.)
+Write-Host 'Orion Quests - uninstalling the auto-update edition...' -ForegroundColor Cyan
 
-# 3. clone-independent restore: for every Discord flavor, if app.asar is a small stub that
-#    points at OUR OrionVencord install and a real _app.asar sits beside it, restore it.
+$runningBefore = @(Get-RunningDiscordFlavors)
+try { Stop-DiscordProcesses } catch { Fail $_.Exception.Message }
+
 $restored = 0; $stuck = 0
-foreach ($f in @('Discord', 'DiscordCanary', 'DiscordPTB')) {
-    Get-ChildItem "$env:LOCALAPPDATA\$f\app-*\resources\app.asar" -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.Length -ge 10000) { return }  # multi-MB real asar = not patched, leave it
-        try { $txt = [IO.File]::ReadAllText($_.FullName) } catch { $txt = '' }
-        if ($txt -notlike '*OrionVencord*') { return }  # someone else's Vencord, not ours - leave it
-        $real = Join-Path $_.Directory.FullName '_app.asar'
-        if (Test-Path $real) {
-            Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-            Rename-Item $real 'app.asar' -ErrorAction SilentlyContinue
+$patcherPath = Join-Path $InstallDir 'dist\patcher.js'
+foreach ($branch in @('stable', 'canary', 'ptb')) {
+    $root = Get-DiscordRoot -Branch $branch
+    Get-ChildItem (Join-Path $root 'app-*\resources\app.asar') -ErrorAction SilentlyContinue | ForEach-Object {
+        if (-not (Test-AppAsarPointsToPatcher -AppAsar $_.FullName -PatcherPath $patcherPath)) { return }
+        if (Restore-VencordAppAsar -AppAsar $_.FullName -PatcherPath $patcherPath) {
             $restored++
         } else {
             $stuck++
@@ -39,25 +41,30 @@ foreach ($f in @('Discord', 'DiscordCanary', 'DiscordPTB')) {
     }
 }
 
-Write-Host ""
+Write-Host ''
 if ($stuck -gt 0) {
-    Write-Host "Couldn't fully restore $stuck Discord install(s) (the backup app.asar was missing)." -ForegroundColor Red
-    Write-Host "Run the official Vencord installer (vencord.dev/download) and pick Uninstall/Repair." -ForegroundColor Red
+    Write-Host "Couldn't fully restore $stuck Discord install(s)." -ForegroundColor Red
+    Write-Host 'Discord was left closed because at least one Orion patch could not be restored safely.' -ForegroundColor Red
+    Write-Host 'Run the official Vencord installer (vencord.dev/download) and pick Uninstall/Repair before reopening Discord.' -ForegroundColor Red
+    Write-Host "Do NOT delete $InstallDir until Repair/Uninstall has completed successfully." -ForegroundColor Red
+    Write-Host ''
+    try { Read-Host 'Press Enter to close' } catch {}
+    exit 1
 } elseif ($restored -gt 0) {
-    Write-Host "Discord restored to its original state." -ForegroundColor Green
+    Write-Host 'Discord restored to its original state.' -ForegroundColor Green
 } else {
-    Write-Host "Nothing of ours was patched into Discord (already clean)." -ForegroundColor Green
+    Write-Host 'Nothing of ours was patched into Discord (already clean).' -ForegroundColor Green
 }
 
-# 4. reopen whichever flavor is installed
-foreach ($f in @('Discord', 'DiscordCanary', 'DiscordPTB')) {
-    $u = Join-Path $env:LOCALAPPDATA "$f\Update.exe"
-    if (Test-Path $u) { Start-Process $u -ArgumentList '--processStart', "$f.exe" -ErrorAction SilentlyContinue; break }
+$failedReopen = @(Start-DiscordFlavors -Branches $runningBefore)
+if ($failedReopen.Count -gt 0) {
+    Write-Host "Uninstall succeeded, but these Discord clients did not reopen automatically: $($failedReopen -join ', ')." -ForegroundColor Yellow
+    Write-Host 'Start them manually. If one still will not open, run the official Vencord installer and choose Repair.' -ForegroundColor Yellow
 }
 
-Write-Host ""
+Write-Host ''
 Write-Host "You can now delete this folder if you want: $InstallDir" -ForegroundColor DarkGray
-Write-Host "Node.js and Git stay installed. To remove them too (optional):" -ForegroundColor DarkGray
-Write-Host "  winget uninstall OpenJS.NodeJS.LTS   and   winget uninstall Git.Git" -ForegroundColor DarkGray
-Write-Host ""
+Write-Host 'Node.js and Git stay installed. To remove them too (optional):' -ForegroundColor DarkGray
+Write-Host '  winget uninstall OpenJS.NodeJS.LTS   and   winget uninstall Git.Git' -ForegroundColor DarkGray
+Write-Host ''
 try { Read-Host 'Press Enter to close' } catch {}
