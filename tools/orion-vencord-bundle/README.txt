@@ -151,6 +151,12 @@ of what you are installing is Vencord.
   in src/userplugins/orionQuests. Those plugin sources are the
   *.ts / *.tsx files at the root of our repository.
 
+  Release builders using tools/package-release.ps1 must pass a
+  -BundleDist that is still inside the clean Vencord source tree that
+  produced it. In a shared clone, park other src/userplugins entries,
+  build, and package before restoring them; a copied-out dist fails
+  the provenance check because its source tree is no longer available.
+
 * The OrionQuests plugin itself is MIT.
   Copyright (c) 2026 Gabriel Bertolassi.
   Source: github.com/nyxxbit/discord-quest-completer

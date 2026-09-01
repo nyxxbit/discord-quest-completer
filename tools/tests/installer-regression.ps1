@@ -38,6 +38,8 @@ Assert-Equal (Resolve-DiscordFlavor -Installed @('stable', 'canary') -Running @(
 Assert-Equal (Resolve-DiscordFlavor -Installed @('stable', 'ptb') -Running @('ptb')) 'ptb' 'Running PTB must win when Stable is also installed.'
 Assert-Equal (Resolve-DiscordFlavor -Installed @('canary') -Running @()) 'canary' 'A single installed flavor is unambiguous even when Discord is closed.'
 Assert-Equal (Resolve-DiscordFlavor -Installed @('stable', 'canary') -Running @() -PreferredBranch 'canary') 'canary' 'An explicit installed branch must be honored.'
+Assert-Equal (Resolve-DiscordFlavor -Installed @('stable', 'canary') -Running @('canary') -PreferredBranch '') 'canary' 'An omitted Discord branch forwarded as an empty string must still use automatic selection.'
+Assert-Throws { Resolve-DiscordFlavor -Installed @('stable') -Running @() -PreferredBranch 'beta' } 'Unsupported explicit Discord branches must still be rejected.'
 Assert-Throws { Resolve-DiscordFlavor -Installed @('stable', 'canary') -Running @() } 'Multiple installed flavors with none running must not silently fall back to Stable.'
 Assert-Throws { Resolve-DiscordFlavor -Installed @('stable', 'canary') -Running @('stable', 'canary') } 'Multiple running flavors are ambiguous and must not be guessed.'
 
@@ -58,6 +60,28 @@ try {
     (Get-Item (Split-Path $oldResources -Parent)).LastWriteTime = (Get-Date).AddMinutes(10)
     (Get-Item (Split-Path $newResources -Parent)).LastWriteTime = (Get-Date).AddMinutes(-10)
     Assert-Equal (Select-VencordDiscordResourcesPath -DiscordRoot $discordRoot) $newResources 'Verification must select the same app-* target rule as Vencord Installer.'
+} finally { Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue }
+
+$temp = Join-Path ([IO.Path]::GetTempPath()) ("orion-health-stamp-test-" + [guid]::NewGuid().ToString('N'))
+try {
+    $dist = Join-Path $temp 'dist'
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    Set-Content -LiteralPath (Join-Path $dist 'patcher.js') -Value "// Vencord deadbeef`npatcher" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $dist 'preload.js') -Value "// Vencord deadbeef`npreload" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $dist 'renderer.js') -Value "// Vencord deadbeef`nOrionQuests" -Encoding ASCII
+    Set-Content -LiteralPath (Join-Path $dist 'renderer.css') -Value 'first-css' -Encoding ASCII
+
+    Write-OrionVencordHealthStamp -InstallDir $temp -DistPath $dist
+    $stamp = Get-OrionVencordHealthStampPath -InstallDir $temp
+    $firstStamp = Get-Content -LiteralPath $stamp -Raw
+
+    Set-Content -LiteralPath (Join-Path $dist 'renderer.css') -Value 'second-css' -Encoding ASCII
+    Write-OrionVencordHealthStamp -InstallDir $temp -DistPath $dist
+    $secondStamp = Get-Content -LiteralPath $stamp -Raw
+
+    Assert-True ($firstStamp -ne $secondStamp) 'Rewriting an existing health stamp must persist the new runtime hashes.'
+    Assert-True (Test-OrionVencordDistHealthy -DistPath $dist -HealthStampPath $stamp) 'The rewritten health stamp must verify the current Vencord runtime.'
+    Assert-Equal @((Get-ChildItem -LiteralPath $temp -Filter '.orion-dist-health.sha256.replace-*' -ErrorAction SilentlyContinue)).Count 0 'Health-stamp replacement must not leave its disposable backup behind.'
 } finally { Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue }
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("orion-asar-test-" + [guid]::NewGuid().ToString('N'))
@@ -131,6 +155,11 @@ try {
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("orion-bundle-cmd-test-" + [guid]::NewGuid().ToString('N'))
 $oldAppData = $env:APPDATA
 $oldLocalAppData = $env:LOCALAPPDATA
+$oldNoDefaultCurrentDirectory = $env:NoDefaultCurrentDirectoryInExePath
+$oldTestStable = $env:ORION_TEST_RUNNING_Discord
+$oldTestCanary = $env:ORION_TEST_RUNNING_DiscordCanary
+$oldTestPtb = $env:ORION_TEST_RUNNING_DiscordPTB
+$oldTestSystemHelper = $env:ORION_TEST_RUNNING_DiscordSystemHelper
 try {
     $roaming = Join-Path $temp 'Roaming'
     $local = Join-Path $temp 'Local'
@@ -143,6 +172,38 @@ try {
 
     Copy-Item (Join-Path $BundleDir 'INSTALL.cmd') $bundleCopy
     Copy-Item $BundleVerifier $bundleCopy
+
+    # The smoke fixture must not observe or kill Discord processes from the host
+    # developer machine. Rewrite process/launch calls only in this temporary copy.
+    $bundleScriptPath = Join-Path $bundleCopy 'INSTALL.cmd'
+    $bundleScript = Get-Content -LiteralPath $bundleScriptPath -Raw
+    $bundleScript = $bundleScript.Replace("`r`n", "`n")
+    $bundleScript = [regex]::Replace($bundleScript, '(?m)^tasklist /FI "IMAGENAME eq ([^"]+)"[^\r\n]*$', 'call :orion_test_is_running $1')
+    $bundleScript = [regex]::Replace($bundleScript, '(?m)^taskkill /F /IM ([^ >]+)[^\r\n]*$', 'call :orion_test_kill $1')
+    $bundleScript = [regex]::Replace($bundleScript, '(?m)^start "" "[^"]+\\Update\.exe" --processStart ([^\r\n]+)$', 'call :orion_test_start $1')
+    $bundleScript += @'
+
+:: test-only process harness injected into the fixture copy
+:orion_test_is_running
+if /I "%~n1"=="Discord" if "%ORION_TEST_RUNNING_Discord%"=="1" exit /b 0
+if /I "%~n1"=="DiscordCanary" if "%ORION_TEST_RUNNING_DiscordCanary%"=="1" exit /b 0
+if /I "%~n1"=="DiscordPTB" if "%ORION_TEST_RUNNING_DiscordPTB%"=="1" exit /b 0
+if /I "%~n1"=="DiscordSystemHelper" if "%ORION_TEST_RUNNING_DiscordSystemHelper%"=="1" exit /b 0
+exit /b 1
+
+:orion_test_kill
+if /I "%~n1"=="Discord" set "ORION_TEST_RUNNING_Discord=0"
+if /I "%~n1"=="DiscordCanary" set "ORION_TEST_RUNNING_DiscordCanary=0"
+if /I "%~n1"=="DiscordPTB" set "ORION_TEST_RUNNING_DiscordPTB=0"
+if /I "%~n1"=="DiscordSystemHelper" set "ORION_TEST_RUNNING_DiscordSystemHelper=0"
+exit /b 0
+
+:orion_test_start
+exit /b 0
+'@
+    Assert-False ($bundleScript -match '(?m)^(tasklist|taskkill)\b') 'Bundle smoke fixture must not use the host process table or kill host Discord processes.'
+    Set-Content -LiteralPath $bundleScriptPath -Value $bundleScript -Encoding ASCII
+
     Set-Content -LiteralPath (Join-Path $bundleCopy 'dist\patcher.js') -Value "// Vencord deadbeef`n// Standalone: true`n// Updater Disabled: true`norion-patcher" -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $bundleCopy 'dist\preload.js') -Value "// Vencord deadbeef`norion-preload" -Encoding ASCII
     Set-Content -LiteralPath (Join-Path $bundleCopy 'dist\renderer.js') -Value "// Vencord deadbeef`nOrionQuests`norion-renderer" -Encoding ASCII
@@ -160,9 +221,14 @@ try {
 
     $env:APPDATA = $roaming
     $env:LOCALAPPDATA = $local
+    $env:NoDefaultCurrentDirectoryInExePath = '1'
+    $env:ORION_TEST_RUNNING_Discord = '0'
+    $env:ORION_TEST_RUNNING_DiscordCanary = '1'
+    $env:ORION_TEST_RUNNING_DiscordPTB = '0'
+    $env:ORION_TEST_RUNNING_DiscordSystemHelper = '0'
     Push-Location $bundleCopy
     try {
-        & cmd.exe /d /c 'INSTALL.cmd <nul'
+        & cmd.exe /d /c '.\INSTALL.cmd <nul'
         $bundleExit = $LASTEXITCODE
     } finally { Pop-Location }
 
@@ -175,6 +241,11 @@ try {
 } finally {
     $env:APPDATA = $oldAppData
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:NoDefaultCurrentDirectoryInExePath = $oldNoDefaultCurrentDirectory
+    $env:ORION_TEST_RUNNING_Discord = $oldTestStable
+    $env:ORION_TEST_RUNNING_DiscordCanary = $oldTestCanary
+    $env:ORION_TEST_RUNNING_DiscordPTB = $oldTestPtb
+    $env:ORION_TEST_RUNNING_DiscordSystemHelper = $oldTestSystemHelper
     Remove-Item $temp -Recurse -Force -ErrorAction SilentlyContinue
 }
 

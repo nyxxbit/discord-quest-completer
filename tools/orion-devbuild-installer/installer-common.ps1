@@ -119,6 +119,7 @@ function Write-OrionVencordHealthStamp {
 
     $stamp = Get-OrionVencordHealthStampPath -InstallDir $InstallDir
     $temporary = "$stamp.new"
+    $replacementBackup = "$stamp.replace-" + [guid]::NewGuid().ToString('N')
     $lines = [string[]]@(Get-VencordDistHashLines -DistPath $DistPath)
     if ($lines.Count -ne $script:VencordDesktopRuntimeFiles.Count) { throw 'could not hash the complete Vencord runtime' }
 
@@ -126,12 +127,15 @@ function Write-OrionVencordHealthStamp {
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         [IO.File]::WriteAllLines($temporary, $lines, $utf8NoBom)
         if (Test-Path -LiteralPath $stamp -PathType Leaf) {
-            [IO.File]::Replace($temporary, $stamp, $null)
+            # Windows PowerShell 5.1 / .NET Framework can reject a null backup path
+            # for File.Replace. Use a same-directory disposable backup instead.
+            [IO.File]::Replace($temporary, $stamp, $replacementBackup)
         } else {
             [IO.File]::Move($temporary, $stamp)
         }
     } finally {
         if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        if (Test-Path -LiteralPath $replacementBackup -PathType Leaf) { Remove-Item -LiteralPath $replacementBackup -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -182,14 +186,14 @@ function Resolve-DiscordFlavor {
     param(
         [string[]]$Installed,
         [string[]]$Running,
-        [ValidateSet('stable', 'canary', 'ptb')][string]$PreferredBranch
+        [string]$PreferredBranch
     )
 
     $installedSet = @($Installed | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)
     $runningSet = @($Running | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Where-Object { $_ -in $installedSet } | Select-Object -Unique)
 
-    if ($PreferredBranch) {
-        $preferred = $PreferredBranch.ToLowerInvariant()
+    if (-not [string]::IsNullOrWhiteSpace($PreferredBranch)) {
+        $preferred = (Get-DiscordFlavorInfo -Branch $PreferredBranch).Branch
         if ($preferred -notin $installedSet) { throw "Discord $preferred is not installed or is not launchable." }
         return $preferred
     }

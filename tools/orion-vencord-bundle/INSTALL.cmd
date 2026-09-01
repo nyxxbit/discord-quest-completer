@@ -284,20 +284,20 @@ exit /b 1
 
 :stable_not_patched
 color 0C
-echo  ERROR: Running/fallback Discord Stable does not point at %%APPDATA%%\Vencord.
+echo  ERROR: Running/fallback Discord Stable is not a launchable client patched to %%APPDATA%%\Vencord.
 goto :patch_help
 
 :canary_not_patched
 color 0C
-echo  ERROR: Running/fallback Discord Canary does not point at %%APPDATA%%\Vencord.
+echo  ERROR: Running/fallback Discord Canary is not a launchable client patched to %%APPDATA%%\Vencord.
 goto :patch_help
 
 :ptb_not_patched
 color 0C
-echo  ERROR: Running/fallback Discord PTB does not point at %%APPDATA%%\Vencord.
+echo  ERROR: Running/fallback Discord PTB is not a launchable client patched to %%APPDATA%%\Vencord.
 
 :patch_help
-echo  Run the official Vencord installer for that client, then retry.
+echo  Make sure that Discord build still has Update.exe and is patched to %%APPDATA%%\Vencord, then retry.
 echo.
 pause
 exit /b 1
