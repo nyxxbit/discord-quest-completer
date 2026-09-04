@@ -413,9 +413,13 @@ async function controlQuestById(questId: string, action: "pause" | "resume"): Pr
 
 export default definePlugin({
     name: "OrionQuests",
-    version: PLUGIN_VERSION,
     description:
         "Auto-completes Discord Quests: game, video, stream, activity, and achievement.",
+    // version sits below description because UserpluginInstaller reads plugin metadata with a
+    // regex that only tolerates whitespace and comments between name and description. Any key in
+    // that gap makes the match fail, and the plugin then never appears in its UserPlugins tab,
+    // which also takes away its uninstall and update buttons.
+    version: PLUGIN_VERSION,
     authors: [{ name: "syntt_", id: 1419678867005767783n }],
     dependencies: ["UserSettingsAPI"],
     settings,
