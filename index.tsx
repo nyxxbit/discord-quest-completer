@@ -21,6 +21,7 @@ import {
     pauseAllQuests,
     pauseQuest,
     readDashboard,
+    readOrbBalance,
     readSchedulerSnapshot,
     resetForAccountChange,
     resumeAllQuests,
@@ -31,7 +32,7 @@ import {
     subscribeSchedulerState as subscribeOrionSchedulerState,
 } from "./orion";
 import { repairSuppressedPresence } from "./patcher";
-import { formatOrbReward, questOrbReward, totalOrbReward, type OrbReward } from "./questRewards";
+import { formatOrbBalance, formatOrbReward, questOrbReward, totalOrbReward, type OrbReward } from "./questRewards";
 import { resolveQuestTarget } from "./questTarget";
 import type { SchedulerSnapshot } from "./schedulerMetadata";
 import { settings } from "./settings";
@@ -261,7 +262,7 @@ async function ensureReadyStop(): Promise<string> {
     return ensureStop();
 }
 
-function statusSummary(): string {
+async function statusSummary(): Promise<string> {
     const running = isEngineRunning();
     const entries = readDashboard();
     if (!running && entries.length === 0) {
@@ -329,7 +330,16 @@ function statusSummary(): string {
     const orbLine = orbTotal
         ? [`Orbs: ${formatOrbReward(orbTotal)} across these task(s)${orbsWaiting ? `, ${formatOrbReward(orbsWaiting)} of it still to claim` : ""}.`]
         : [];
-    return [header, ...lines, ...orbLine, ...footer].join("\n");
+    // The balance may need a request, unlike everything else here, so a failed read prints its
+    // reason on that one line and leaves the rest of the status intact.
+    let balanceLine: string;
+    try {
+        const balance = formatOrbBalance(await readOrbBalance());
+        balanceLine = balance ? `Balance: ${balance} on the account.` : "Balance: unavailable, Discord sent no number.";
+    } catch (error) {
+        balanceLine = `Balance: unavailable, ${error instanceof Error ? error.message : String(error)}.`;
+    }
+    return [header, ...lines, ...orbLine, balanceLine, ...footer].join("\n");
 }
 
 function formatCandidates(names: string[]): string {
@@ -555,7 +565,7 @@ export default definePlugin({
                     else if (action === "stop") response = await ensureReadyStop();
                     else if (action === "pause") response = await ensureReadyPause(target);
                     else if (action === "resume") response = await ensureReadyResume(target);
-                    else response = statusSummary();
+                    else response = await statusSummary();
                 } catch (error) {
                     response = `Control unavailable: ${error instanceof Error ? error.message : String(error)}`;
                 }

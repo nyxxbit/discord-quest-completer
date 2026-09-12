@@ -69,3 +69,16 @@ export function formatOrbReward(reward: OrbReward | null): string {
         ? `${reward.orbs} Orbs (${reward.premiumOrbs} with Nitro)`
         : `${reward.orbs} Orbs`;
 }
+
+/**
+ * The Orb balance Discord reports for the account, or null for anything that is not a whole
+ * non-negative number. Zero is a real balance and is kept, unlike a payout of zero.
+ */
+export function orbBalance(value: unknown): number | null {
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/** The balance as text, empty when it is unknown. */
+export function formatOrbBalance(balance: number | null): string {
+    return balance === null ? "" : `${balance} Orbs`;
+}

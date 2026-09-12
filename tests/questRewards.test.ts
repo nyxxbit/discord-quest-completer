@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { formatOrbReward, questOrbReward, totalOrbReward } from "../questRewards";
+import { formatOrbBalance, formatOrbReward, orbBalance, questOrbReward, totalOrbReward } from "../questRewards";
 
 const orbQuest = (rewards: any[]) => ({ rewardsConfig: { rewards } });
 
@@ -71,4 +71,20 @@ test("the Nitro figure is only named when it differs", () => {
     assert.equal(formatOrbReward({ orbs: 240, premiumOrbs: 288 }), "240 Orbs (288 with Nitro)");
     assert.equal(formatOrbReward({ orbs: 240, premiumOrbs: 240 }), "240 Orbs");
     assert.equal(formatOrbReward(null), "");
+});
+
+test("an account balance is any whole non-negative number, zero included", () => {
+    assert.equal(orbBalance(3240), 3240);
+    assert.equal(orbBalance(0), 0);
+    assert.equal(orbBalance(-1), null);
+    assert.equal(orbBalance(12.5), null);
+    assert.equal(orbBalance("3240"), null);
+    assert.equal(orbBalance(null), null);
+    assert.equal(orbBalance(undefined), null);
+});
+
+test("a balance prints as Orbs and an unknown one prints nothing", () => {
+    assert.equal(formatOrbBalance(3240), "3240 Orbs");
+    assert.equal(formatOrbBalance(0), "0 Orbs");
+    assert.equal(formatOrbBalance(null), "");
 });

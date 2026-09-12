@@ -18,6 +18,7 @@ import { companionFailure, COMPANION_EVENT_CODES, emitCompanionEvent } from "./c
 import { setAchievementBypassHook } from "./hooks";
 import { Patcher } from "./patcher";
 import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, taskEntries } from "./questConfig";
+import { orbBalance } from "./questRewards";
 import { schedulerLaneForTaskType, schedulerMetadata, type SchedulerLane, type SchedulerSnapshot, type SchedulerTaskView } from "./schedulerMetadata";
 import { settings } from "./settings";
 import { TaskControlRegistry, type TaskLifecycle } from "./taskControl";
@@ -100,6 +101,7 @@ let traffic: Traffic | null = null;
 let tasks: TaskRunner | null = null;
 let questStore: any = null;
 let userStore: any = null;
+let virtualCurrencyStore: any = null;
 let sessionOwnerUserId: string | null = null;
 /**
  * Why the last run ended, when it ended on its own rather than by the user stopping it.
@@ -202,6 +204,26 @@ export function getQuestStore(): any {
 export function getUserStore(): any {
     if (!userStore) userStore = findStore("UserStore");
     return userStore;
+}
+
+export function getVirtualCurrencyStore(): any {
+    if (!virtualCurrencyStore) virtualCurrencyStore = findStore("VirtualCurrencyStore");
+    return virtualCurrencyStore;
+}
+
+/**
+ * Orbs on the account. VirtualCurrencyStore holds the figure Discord's own Orb pill shows once
+ * the client has fetched it, so that is read first. Before then it is null and one GET of the
+ * balance endpoint fills it in. Nothing polls; this runs only when a status is asked for.
+ */
+export async function readOrbBalance(): Promise<number | null> {
+    const stored = orbBalance(getVirtualCurrencyStore()?.balance);
+    if (stored !== null) return stored;
+
+    const API = (RestAPI as any) || findByProps("get", "post", "del");
+    if (!API) throw new Error("RestAPI not found");
+    const res = await API.get({ url: "/users/@me/virtual-currency/balance" });
+    return orbBalance(res?.body?.balance);
 }
 
 export function getCurrentUserId(): string | null {
