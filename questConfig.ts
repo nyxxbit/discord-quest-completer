@@ -223,6 +223,37 @@ export function summarizeRun(outcomes: Map<string, QuestOutcome>): RunSummary {
 }
 
 /**
+ * Message lines for quests that share one game.
+ *
+ * Several quests can be the same game (same application id, usually one quest offered per
+ * region). They all progress at once: Discord credits play time to every enrolled quest of that
+ * game while it runs once, so they finish together even though the scheduler only ever drives
+ * one at a time. Issue #95 read that as the concurrency limit being bypassed, so the run says
+ * plainly that it is not. Only GAME quests share this way, since the shared signal is play time;
+ * WATCH_VIDEO, STREAM, ACTIVITY and ACHIEVEMENT each progress per quest.
+ */
+export function summarizeSharedGameQuests(
+    tasks: ReadonlyArray<{ appId: string | number; name: string; type: string; }>,
+): string[] {
+    const groups = new Map<string, { name: string; count: number; }>();
+    for (const t of tasks) {
+        if (t.type !== "GAME") continue;
+        const key = String(t.appId ?? "");
+        if (!key || key === "0") continue;
+        const g = groups.get(key);
+        if (g) g.count++;
+        else groups.set(key, { name: t.name, count: 1 });
+    }
+
+    const lines: string[] = [];
+    for (const { name, count } of groups.values()) {
+        if (count < 2) continue;
+        lines.push(`${count} "${name}" quests are the same game, so Discord credits all ${count} while it runs once and they finish together. The limit still drives one at a time.`);
+    }
+    return lines;
+}
+
+/**
  * Choose which win32 executable to claim for a spoofed game, and where to say it lives.
  *
  * Discord's `executables[]` entries are not always a bare file name, which is what the old

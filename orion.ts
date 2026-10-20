@@ -17,7 +17,7 @@ import { isConfirmedDifferentAccount } from "./accountIdentity";
 import { companionFailure, COMPANION_EVENT_CODES, emitCompanionEvent } from "./companionEvents";
 import { setAchievementBypassHook, setOrbQuestsOnlyHook } from "./hooks";
 import { Patcher } from "./patcher";
-import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, taskEntries } from "./questConfig";
+import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, summarizeSharedGameQuests, taskEntries } from "./questConfig";
 import { orbBalance, questOrbReward } from "./questRewards";
 import { schedulerLaneForTaskType, schedulerMetadata, type SchedulerLane, type SchedulerSnapshot, type SchedulerTaskView } from "./schedulerMetadata";
 import { settings } from "./settings";
@@ -831,6 +831,10 @@ async function mainLoop(
             }
 
             const queues: { video: ScheduledTask[]; game: ScheduledTask[]; } = { video: [], game: [] };
+            // Collected alongside the queues so the cycle can point out quests that are the same
+            // game and will finish together (issue #95). Kept separate from ScheduledTask, which
+            // deliberately carries only run/isActive.
+            const scheduledInfo: { appId: string | number; name: string; type: string; }[] = [];
 
             for (const q of active) {
                 if (!isRunActive(runId, runRuntime)) break;
@@ -1052,6 +1056,7 @@ async function mainLoop(
                     };
 
                     queues[schedulerLaneForTaskType(type)].push(scheduled);
+                    scheduledInfo.push({ appId: t.appId, name: t.name, type });
                 } catch (e: any) {
                     if (isRunActive(runId, runRuntime)) logger.error(`[Quest] Error processing ${q.id}: ${e?.message}`);
                 }
@@ -1060,6 +1065,7 @@ async function mainLoop(
             const total = queues.video.length + queues.game.length;
             if (total > 0 && isRunActive(runId, runRuntime)) {
                 logger.info(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`);
+                for (const note of summarizeSharedGameQuests(scheduledInfo)) logger.info(`[Cycle] ${note}`);
                 emitCompanionEvent({
                     code: COMPANION_EVENT_CODES.CYCLE_PROCESSING,
                     category: "cycle",

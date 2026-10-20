@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, taskEntries, taskForKey, UNAUTOMATABLE_KEYS } from "../questConfig";
+import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, summarizeSharedGameQuests, taskEntries, taskForKey, UNAUTOMATABLE_KEYS } from "../questConfig";
 import type { DetectedTask, QuestOutcome } from "../types";
 
 test("taskConfigV2 wins when Discord keeps both current and legacy configs", () => {
@@ -203,4 +203,37 @@ test("a quest put back after Orb-only is turned off and then finished counts onc
 
 test("a filter recorded after a completion never overwrites it", () => {
     assert.equal(summarizeRun(outcomesOf(["q1", "completed"], ["q1", "filtered"])).finished, 1);
+});
+
+// Issue #95: several quests that are the same game progress together because Discord credits
+// every enrolled quest of a game while it runs once. The run announces that so it does not read
+// as the concurrency limit being bypassed.
+const game = (appId: string | number, name: string) => ({ appId, name, type: "GAME" });
+
+test("same-game quests produce one line naming the count", () => {
+    const lines = summarizeSharedGameQuests([game(100, "Clean Crew"), game(100, "Clean Crew"), game(100, "Clean Crew")]);
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /^3 "Clean Crew" quests are the same game/);
+    assert.match(lines[0], /drives one at a time/);
+});
+
+test("distinct games never share, and a lone quest says nothing", () => {
+    assert.deepEqual(summarizeSharedGameQuests([game(1, "A"), game(2, "B"), game(3, "C")]), []);
+    assert.deepEqual(summarizeSharedGameQuests([game(1, "A")]), []);
+});
+
+test("non-GAME task types do not share progress by game", () => {
+    assert.deepEqual(summarizeSharedGameQuests([{ appId: 7, name: "Clip", type: "WATCH_VIDEO" }, { appId: 7, name: "Clip", type: "WATCH_VIDEO" }]), []);
+    assert.deepEqual(summarizeSharedGameQuests([{ appId: 8, name: "Str", type: "STREAM" }, { appId: 8, name: "Str", type: "STREAM" }]), []);
+});
+
+test("appId 0 or empty is not a shared game", () => {
+    assert.deepEqual(summarizeSharedGameQuests([game(0, "No App"), game(0, "No App"), game("", "Blank"), game("", "Blank")]), []);
+});
+
+test("two separate shared games each get their own line", () => {
+    const lines = summarizeSharedGameQuests([game(1, "A"), game(1, "A"), game(2, "B"), game(2, "B"), game(3, "C")]);
+    assert.equal(lines.length, 2);
+    assert.ok(lines.some(l => l.startsWith('2 "A"')));
+    assert.ok(lines.some(l => l.startsWith('2 "B"')));
 });

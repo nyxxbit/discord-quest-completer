@@ -2763,6 +2763,10 @@
                 }
 
                 const queues = { video: [], game: [] };
+                // issue #95: GAME quests that are the same app all progress while one of them
+                // runs, so the cycle below says so instead of it looking like the limit was
+                // bypassed. Mirrors summarizeSharedGameQuests in the plugin's questConfig.ts.
+                const scheduledInfo = [];
 
                 active.forEach(q => {
                     try {
@@ -2846,6 +2850,7 @@
 
                         if (type === "WATCH_VIDEO") queues.video.push(taskFunc);
                         else queues.game.push(taskFunc);
+                        scheduledInfo.push({ appId: tInfo.appId, name: tInfo.name, type });
                     } catch (e) {
                         Logger.log(`[Quest] Error processing ${q.id}: ${e.message}`, 'err');
                     }
@@ -2855,6 +2860,18 @@
 
                 if (totalTasks > 0) {
                     Logger.log(`[Cycle] Processing: ${queues.video.length} videos, ${queues.game.length} games.`, 'info');
+                    const sharedGames = new Map();
+                    for (const s of scheduledInfo) {
+                        if (s.type !== "GAME") continue;
+                        const key = String(s.appId ?? "");
+                        if (!key || key === "0") continue;
+                        const g = sharedGames.get(key);
+                        if (g) g.count++; else sharedGames.set(key, { name: s.name, count: 1 });
+                    }
+                    for (const { name, count } of sharedGames.values()) {
+                        if (count < 2) continue;
+                        Logger.log(`[Cycle] ${count} "${name}" quests are the same game, so Discord credits all ${count} while it runs once and they finish together. The limit still drives one at a time.`, 'info');
+                    }
                     const pGames = runConcurrent(queues.game, 1);
                     const pVideos = runConcurrent(queues.video, 2);
                     await Promise.all([pGames, pVideos]);
