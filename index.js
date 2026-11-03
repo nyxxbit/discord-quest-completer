@@ -177,7 +177,7 @@
 
     // expiresAt is occasionally missing/malformed mid-rollout. new Date(undefined) is NaN and
     // `NaN > now` is always false, which would silently drop the quest with no log. Treat an
-    // unparseable expiry as "not expired" so we attempt the quest instead of hiding it.
+    // absent or unparseable expiry as "not expired" so we attempt the quest instead of hiding it.
     // Discord keeps its own expiry verdict in QuestStore, refreshed on every user-status update
     // and rearmed by a timer, and its default when it has no entry is NOT expired. Ask it first
     // and only fall back to reading the timestamp ourselves.
@@ -186,7 +186,7 @@
             const store = Mods.QuestStore;
             if (typeof store?.isQuestExpired === 'function') return store.isQuestExpired(q.id) !== true;
         } catch (_) { /* fall through to the timestamp */ }
-        const e = new Date(q.config?.expiresAt ?? 0).getTime();
+        const e = new Date(q.config?.expiresAt ?? NaN).getTime();
         return Number.isNaN(e) || e > Date.now();
     };
 

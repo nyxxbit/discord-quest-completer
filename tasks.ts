@@ -19,7 +19,7 @@ import {
 import { HeartbeatWatchdog } from "./heartbeatWatchdog";
 import { cleanupCreatedOAuthGrants } from "./oauthLifecycle";
 import type { Patcher } from "./patcher";
-import { isConsoleOnly, pickExecutable, recordOutcome, selectTaskFamily, taskEntries, taskForKey } from "./questConfig";
+import { isConsoleOnly, isQuestExpired, pickExecutable, recordOutcome, selectTaskFamily, taskEntries, taskForKey } from "./questConfig";
 import { settings } from "./settings";
 import type { TaskLifecycle } from "./taskControl";
 import type { Traffic } from "./traffic";
@@ -1097,32 +1097,10 @@ export class TaskRunner {
         }
     }
 
-    /**
-     * Whether a quest is past its end, answered the way Discord answers it.
-     *
-     * QuestStore.isQuestExpired is Discord's own verdict: it keeps an expiry map, refreshes it on
-     * every user-status update and rearms a timer for the next quest due to expire. Reading it is
-     * better than recomputing, and its default when it has no entry is NOT expired.
-     *
-     * The fallback only runs when that accessor is missing. It used to be
-     * `new Date(expiresAt ?? 0).getTime() > now`, which reads an absent or unparseable expiresAt
-     * as NaN, and `NaN > now` is false, so a quest Discord considers live was dropped without a
-     * word. The userscript already treated NaN as live; the two engines disagreed on exactly the
-     * quests nobody would think to check.
-     */
-    private isExpired(q: Quest): boolean {
-        const store = this.stores.QuestStore;
-        if (typeof store?.isQuestExpired === "function") {
-            try { return store.isQuestExpired(q.id) === true; } catch { /* fall through */ }
-        }
-        const ends = new Date(q.config?.expiresAt ?? NaN).getTime();
-        return !isNaN(ends) && ends <= Date.now();
-    }
-
     activeQuests(quests: Quest[]): Quest[] {
         return quests.filter(q =>
             !q.userStatus?.completedAt
-            && !this.isExpired(q)
+            && !isQuestExpired(this.stores.QuestStore, q)
             && q.id !== BLACKLISTED_QUEST_ID
             && !this.skipped.has(q.id)
         );

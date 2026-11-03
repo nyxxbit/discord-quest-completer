@@ -6,7 +6,7 @@
  * Pure helpers for Discord's legacy taskConfig and current taskConfigV2 shapes.
  */
 
-import type { DetectedTask, QuestOutcome, RunSummary, TaskType } from "./types";
+import type { DetectedTask, Quest, QuestOutcome, RunSummary, TaskType } from "./types";
 
 export function taskEntries(tasks: unknown): Array<[string, any]> {
     if (!tasks) return [];
@@ -251,6 +251,27 @@ export function summarizeSharedGameQuests(
         lines.push(`${count} "${name}" quests are the same game, so Discord credits all ${count} while it runs once and they finish together. The limit still drives one at a time.`);
     }
     return lines;
+}
+
+/**
+ * Whether a quest is past its end, answered the way Discord answers it.
+ *
+ * QuestStore.isQuestExpired is Discord's own verdict: it keeps an expiry map, refreshes it on
+ * every user-status update and rearms a timer for the next quest due to expire, and its default
+ * when it has no entry is NOT expired. Reading it beats recomputing.
+ *
+ * The timestamp fallback runs only when that accessor is missing or throws. An absent or
+ * unparseable expiresAt reads as live, so a quest Discord still counts as live is attempted
+ * instead of dropped without a word. `?? 0` is the trap here: an absent expiresAt becomes epoch
+ * 0, a date in the past. The userscript's notExpired mirrors this function and
+ * tests/parity.userscript.test.ts holds the two together.
+ */
+export function isQuestExpired(questStore: any, q: Quest): boolean {
+    if (typeof questStore?.isQuestExpired === "function") {
+        try { return questStore.isQuestExpired(q.id) === true; } catch { /* fall through to the timestamp */ }
+    }
+    const ends = new Date(q.config?.expiresAt ?? NaN).getTime();
+    return !isNaN(ends) && ends <= Date.now();
 }
 
 /**
