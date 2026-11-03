@@ -62,7 +62,7 @@ jobs:
 
       - name: TypeScript
         working-directory: vencord
-        run: pnpm testTsc
+        run: pnpm test:ts
 
       - name: Lint plugin
         working-directory: vencord
