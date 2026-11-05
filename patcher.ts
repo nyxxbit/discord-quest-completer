@@ -89,6 +89,10 @@ const PATCHED_METHODS = [
 ] as const;
 
 export class Patcher {
+    // Each add materialises one process and each remove drops that same object; keeping two
+    // alive for one application is the caller's business, not this one's. Accepted quests of a
+    // single game run off one shared session that adds and removes once (issue #96, gameSession.ts),
+    // so this stays the plain spoof it was before that.
     private games: FakeGame[] = [];
     private real: Record<string, any> = {};
     private active = false;
@@ -186,7 +190,6 @@ export class Patcher {
     }
 
     add(g: FakeGame): void {
-        if (this.games.some(x => x.pid === g.pid)) return;
         this.games.push(g);
         this.toggle(true);
         this.syncPresenceSuppression();
@@ -195,9 +198,12 @@ export class Patcher {
     }
 
     remove(g: FakeGame): void {
-        const before = this.games.length;
-        this.games = this.games.filter(x => x.pid !== g.pid);
-        if (this.games.length === before) return;
+        // Drop the exact object that was added, by identity. Removing by app id would let a
+        // group's shared game and a lone one for the same app delete each other, and nothing
+        // runs both at once anyway.
+        const idx = this.games.indexOf(g);
+        if (idx === -1) return;
+        this.games.splice(idx, 1);
 
         this.dispatch([], [g]);
         this.syncPresenceSuppression();

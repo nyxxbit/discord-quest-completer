@@ -15,6 +15,7 @@ import { FluxDispatcher, RestAPI } from "@webpack/common";
 
 import { isConfirmedDifferentAccount } from "./accountIdentity";
 import { companionFailure, COMPANION_EVENT_CODES, emitCompanionEvent } from "./companionEvents";
+import { runSharedGameSession } from "./gameSession";
 import { setAchievementBypassHook, setOrbQuestsOnlyHook } from "./hooks";
 import { Patcher } from "./patcher";
 import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, summarizeSharedGameQuests, taskEntries } from "./questConfig";
@@ -831,6 +832,11 @@ async function mainLoop(
             }
 
             const queues: { video: ScheduledTask[]; game: ScheduledTask[]; } = { video: [], game: [] };
+            // Already-accepted GAME quests of one application run under a single shared game
+            // session (issue #96): gathered here by appId and folded into one scheduler unit
+            // below, so one fake process serves them all and gameConcurrency counts applications.
+            // The name rides along so the group can open the session without a member in hand.
+            const gameGroups = new Map<string, { name: string; members: ScheduledTask[]; }>();
             // Collected alongside the queues so the cycle can point out quests that are the same
             // game and will finish together (issue #95). Kept separate from ScheduledTask, which
             // deliberately carries only run/isActive.
@@ -1055,11 +1061,40 @@ async function mainLoop(
                         },
                     };
 
-                    queues[schedulerLaneForTaskType(type)].push(scheduled);
+                    // An accepted GAME quest joins its application's group instead of the queue;
+                    // the group is materialised into one scheduler unit after the scan. Not-yet-
+                    // accepted quests keep the per-quest path so JIT enrollment is unchanged.
+                    const lane = schedulerLaneForTaskType(type);
+                    if (type === "GAME" && q.userStatus?.enrolledAt && t.appId) {
+                        const appKey = String(t.appId);
+                        const group = gameGroups.get(appKey);
+                        if (group) group.members.push(scheduled);
+                        else gameGroups.set(appKey, { name: t.name, members: [scheduled] });
+                    } else {
+                        queues[lane].push(scheduled);
+                    }
                     scheduledInfo.push({ appId: t.appId, name: t.name, type });
                 } catch (e: any) {
                     if (isRunActive(runId, runRuntime)) logger.error(`[Quest] Error processing ${q.id}: ${e?.message}`);
                 }
+            }
+
+            // Fold each application's accepted GAME quests into the game queue. A lone quest is
+            // pushed unchanged, so distinct apps behave exactly as before; two or more become one
+            // unit that opens a single shared session, runs its members off it, and closes it once
+            // they have all settled, so one process serves the group start to finish (issue #96).
+            for (const [appKey, { name, members }] of gameGroups) {
+                if (members.length === 1) {
+                    queues.game.push(members[0]);
+                    continue;
+                }
+                queues.game.push({
+                    isActive: () => members.some(m => m.isActive()),
+                    run: () => runSharedGameSession(members, {
+                        open: () => runTasks.openGameSession(appKey, name),
+                        close: () => runTasks.closeGameSession(appKey),
+                    }),
+                });
             }
 
             const total = queues.video.length + queues.game.length;

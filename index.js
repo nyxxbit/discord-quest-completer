@@ -1258,6 +1258,10 @@
 
     const Patcher = {
         games: [], real: {}, active: false,
+        // Each add materialises one process and each remove drops that same object. Accepted
+        // quests of one game run off a single shared session that adds and removes once (issue
+        // #96), so this stays the plain spoof it was; keeping two alive for one app is the
+        // caller's business, not this one's.
         savedShowCurrentGame: null,  // value before we forced it off; null = not suppressed
         _unhide: null,               // pagehide listener, detached once the setting is restored
 
@@ -1354,7 +1358,6 @@
         },
 
         add(g) {
-            if (this.games.some(x => x.pid === g.pid)) return;
             this.games.push(g);
             this.toggle(true);
             this.syncPresenceSuppression();
@@ -1363,9 +1366,12 @@
         },
 
         remove(g) {
-            const before = this.games.length;
-            this.games = this.games.filter(x => x.pid !== g.pid);
-            if (this.games.length === before) return;
+            // Drop the exact object that was added, by identity. Removing by app id would let a
+            // group's shared game and a lone one for the same app delete each other, and nothing
+            // runs both at once anyway.
+            const idx = this.games.indexOf(g);
+            if (idx === -1) return;
+            this.games.splice(idx, 1);
 
             this.dispatch([], [g]);
             this.syncPresenceSuppression();
@@ -1455,6 +1461,7 @@
         outcomes: new Map(),
         _streamReal: undefined,  // untouched StreamStore method, captured before the first spoof
         _streamSpoofs: 0,        // active STREAM tasks holding the spoof
+        gameSessions: new Map(), // app id -> the one shared session its accepted quests run off (#96)
 
         // userStatus.progress is a plain object over REST, but dispatched payloads go through
         // the client's own transform first, so the shape isn't ours to assume. Defensive: if
@@ -1603,6 +1610,41 @@
             }
         },
 
+        makeFakeGame(data) {
+            const pid = rnd(2500, 12500) * 4;
+            return {
+                id: data.id, name: data.name, icon: data.icon,
+                pid, pidPath: [pid], processName: data.name, start: Date.now(),
+                exeName: data.exeName, exePath: data.exePath, cmdLine: data.cmdLine,
+                executables: [{ os: 'win32', name: data.exeName, is_launcher: false }],
+                windowHandle: 0, fullscreenType: 0, overlay: true, sandboxed: false,
+                hidden: false, isLauncher: false
+            };
+        },
+
+        // Open the one shared process an application's accepted quests run off (issue #96). The
+        // metadata is fetched and the process materialised once here, so the group's members
+        // neither re-request it nor spawn a process each. The group closes it once every member
+        // has settled.
+        async openGameSession(appId, appName) {
+            const data = await this.fetchGameData(appId, appName);
+            // A STOP while the fetch was in flight has already flushed the patcher, so a resolved
+            // continuation would reinstall a process after teardown. generic() makes the same
+            // post-await liveness check for the per-quest path; the shared session needs it too.
+            if (!RUNTIME.running) return;
+            const game = this.makeFakeGame(data);
+            this.gameSessions.set(String(appId), { data, game });
+            Patcher.add(game);
+        },
+
+        // Drop the application's shared process once its group has fully settled.
+        closeGameSession(appId) {
+            const session = this.gameSessions.get(String(appId));
+            if (!session) return;
+            this.gameSessions.delete(String(appId));
+            Patcher.remove(session.game);
+        },
+
         async claimReward(questId) {
             return await Mods.API.post({
                 url: `/quests/${questId}/claim-reward`,
@@ -1702,7 +1744,11 @@
             // but reading progress under a hardcoded legacy name would return undefined and
             // pin the task at 0 until the safety timer kills it.
             const key = t.keyName || fallbackKey;
-            const gameData = await this.fetchGameData(t.appId, t.name);
+            // A GAME quest whose app has an open shared session is a group member (issue #96): it
+            // reads the group's game data instead of fetching its own and leaves the one process
+            // to the group. A lone quest and every stream still fetch and spoof for themselves.
+            const session = type === "GAME" ? this.gameSessions.get(String(t.appId)) : undefined;
+            const gameData = session?.data ?? await this.fetchGameData(t.appId, t.name);
 
             // Re-check after the await, not only before it. Fetching the app metadata is a
             // network round trip, and STOP landing inside it used to let this continuation
@@ -1710,15 +1756,7 @@
             if (!RUNTIME.running) return;
 
             return new Promise(resolve => {
-                const pid = rnd(2500, 12500) * 4;
-                const game = {
-                    id: gameData.id, name: gameData.name, icon: gameData.icon,
-                    pid, pidPath: [pid], processName: gameData.name, start: Date.now(),
-                    exeName: gameData.exeName, exePath: gameData.exePath, cmdLine: gameData.cmdLine,
-                    executables: [{ os: 'win32', name: gameData.exeName, is_launcher: false }],
-                    windowHandle: 0, fullscreenType: 0, overlay: true, sandboxed: false,
-                    hidden: false, isLauncher: false
-                };
+                const game = this.makeFakeGame(gameData);
 
                 let cleanupHook;
                 let cleaned = false;
@@ -1737,7 +1775,7 @@
                         // spoof and later "restored" that, leaving the store patched for good.
                         if (Tasks._streamSpoofs === 0) Tasks._streamReal = Mods.StreamStore.getStreamerActiveStreamMetadata;
                         Tasks._streamSpoofs++;
-                        Mods.StreamStore.getStreamerActiveStreamMetadata = () => ({ id: gameData.id, pid, sourceName: gameData.name });
+                        Mods.StreamStore.getStreamerActiveStreamMetadata = () => ({ id: gameData.id, pid: game.pid, sourceName: gameData.name });
                     }
                     // restore unconditionally when the store exists. Assigning back an
                     // undefined original is the correct revert. Guarding on it being truthy
@@ -1747,9 +1785,13 @@
                             Mods.StreamStore.getStreamerActiveStreamMetadata = Tasks._streamReal;
                         }
                     };
-                } else {
+                } else if (!session) {
                     Patcher.add(game);
                     cleanupHook = () => Patcher.remove(game);
+                } else {
+                    // a group member: the shared session owns the one process; nothing to add or
+                    // remove here, the member only watches its own heartbeat below.
+                    cleanupHook = () => { };
                 }
 
                 // Seed from progress the server already holds. Painting 0 here made a resumed
@@ -2763,6 +2805,10 @@
                 }
 
                 const queues = { video: [], game: [] };
+                // Already-accepted GAME quests of one application run under a single shared game
+                // session (issue #96): gathered here by appId and folded into one queue unit
+                // after the scan, so one fake process serves them all. Mirrors orion.ts.
+                const gameGroups = new Map();
                 // issue #95: GAME quests that are the same app all progress while one of them
                 // runs, so the cycle below says so instead of it looking like the limit was
                 // bypassed. Mirrors summarizeSharedGameQuests in the plugin's questConfig.ts.
@@ -2848,13 +2894,35 @@
                             return runner(q, tInfo, q.userStatus);
                         };
 
+                        // An accepted GAME quest joins its application's group instead of the
+                        // queue; groups are folded into one unit each after the scan. Everything
+                        // else (incl. not-yet-accepted quests) keeps the per-quest path.
                         if (type === "WATCH_VIDEO") queues.video.push(taskFunc);
+                        else if (type === "GAME" && q.userStatus?.enrolledAt && appId) {
+                            const appKey = String(appId);
+                            const group = gameGroups.get(appKey);
+                            if (group) group.members.push(taskFunc);
+                            else gameGroups.set(appKey, { name: tInfo.name, members: [taskFunc] });
+                        }
                         else queues.game.push(taskFunc);
                         scheduledInfo.push({ appId: tInfo.appId, name: tInfo.name, type });
                     } catch (e) {
                         Logger.log(`[Quest] Error processing ${q.id}: ${e.message}`, 'err');
                     }
                 });
+
+                // Fold each application's accepted GAME quests into the game queue. A lone quest
+                // is pushed unchanged (distinct apps behave as before); two or more become one
+                // unit that opens a single shared session, runs its members off it, and closes it
+                // once they have all settled, so one process serves the group start to finish (#96).
+                for (const [appKey, { name, members }] of gameGroups) {
+                    if (members.length === 1) { queues.game.push(members[0]); continue; }
+                    queues.game.push(async () => {
+                        await Tasks.openGameSession(appKey, name);
+                        try { await Promise.allSettled(members.map(m => m())); }
+                        finally { Tasks.closeGameSession(appKey); }
+                    });
+                }
 
                 const totalTasks = queues.video.length + queues.game.length;
 
