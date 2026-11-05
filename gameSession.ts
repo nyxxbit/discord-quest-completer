@@ -3,34 +3,33 @@
  * Copyright (c) 2026 nyxxbit
  * SPDX-License-Identifier: MIT
  *
- * One spoofed process per application, shared across its accepted quests (issue #96).
+ * One spoofed process per application, owned by the group of its accepted quests (issue #96).
  *
- * Sibling quests of the same game each acquire and release a hold on their application's
- * process. Only the first hold materialises a process and only the last one released tears it
- * down, so two or three quests of one app run off a single session instead of one each. Pure
- * bookkeeping, kept out of the Patcher so it can be exercised without a Discord to patch.
+ * The group opens a single shared session before its members run and closes it after the last
+ * one settles, so a member that pauses or finishes early never removes a process a sibling still
+ * needs. The orchestration is pure so it can be exercised without a Discord to patch; the open
+ * and close side effects (fetch, spoof, teardown) live in the TaskRunner and Patcher.
  */
 
-export class GameSessionRefs {
-    private readonly counts = new Map<string, number>();
+export interface GameSession {
+    open(): Promise<void>;
+    close(): void;
+}
 
-    /** Record a hold on `id`'s process. True only for the first hold: materialise it now. */
-    acquire(id: string): boolean {
-        const held = this.counts.get(id) ?? 0;
-        this.counts.set(id, held + 1);
-        return held === 0;
-    }
-
-    /** Drop a hold on `id`'s process. True only for the last hold released: tear it down now. */
-    release(id: string): boolean {
-        const held = this.counts.get(id) ?? 0;
-        if (held === 0) return false; // never held, or already torn down
-        if (held > 1) { this.counts.set(id, held - 1); return false; } // a sibling still needs it
-        this.counts.delete(id);
-        return true;
-    }
-
-    clear(): void {
-        this.counts.clear();
+/**
+ * Run every member of an application's quest group against one shared session. The session is
+ * opened once up front and closed once in a finally, so the one process outlives any member that
+ * pauses or completes early and is torn down exactly once, after they have all settled. Members
+ * run concurrently; a member that rejects is contained by allSettled and still lets the rest run.
+ */
+export async function runSharedGameSession(
+    members: { run(): Promise<void>; }[],
+    session: GameSession,
+): Promise<void> {
+    await session.open();
+    try {
+        await Promise.allSettled(members.map(m => m.run()));
+    } finally {
+        session.close();
     }
 }

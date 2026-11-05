@@ -15,6 +15,7 @@ import { FluxDispatcher, RestAPI } from "@webpack/common";
 
 import { isConfirmedDifferentAccount } from "./accountIdentity";
 import { companionFailure, COMPANION_EVENT_CODES, emitCompanionEvent } from "./companionEvents";
+import { runSharedGameSession } from "./gameSession";
 import { setAchievementBypassHook, setOrbQuestsOnlyHook } from "./hooks";
 import { Patcher } from "./patcher";
 import { questBlocker, recordOutcome, selectQuestTaskConfig, summarizeRun, summarizeSharedGameQuests, taskEntries } from "./questConfig";
@@ -834,7 +835,8 @@ async function mainLoop(
             // Already-accepted GAME quests of one application run under a single shared game
             // session (issue #96): gathered here by appId and folded into one scheduler unit
             // below, so one fake process serves them all and gameConcurrency counts applications.
-            const gameGroups = new Map<string, ScheduledTask[]>();
+            // The name rides along so the group can open the session without a member in hand.
+            const gameGroups = new Map<string, { name: string; members: ScheduledTask[]; }>();
             // Collected alongside the queues so the cycle can point out quests that are the same
             // game and will finish together (issue #95). Kept separate from ScheduledTask, which
             // deliberately carries only run/isActive.
@@ -1065,9 +1067,9 @@ async function mainLoop(
                     const lane = schedulerLaneForTaskType(type);
                     if (type === "GAME" && q.userStatus?.enrolledAt && t.appId) {
                         const appKey = String(t.appId);
-                        const members = gameGroups.get(appKey);
-                        if (members) members.push(scheduled);
-                        else gameGroups.set(appKey, [scheduled]);
+                        const group = gameGroups.get(appKey);
+                        if (group) group.members.push(scheduled);
+                        else gameGroups.set(appKey, { name: t.name, members: [scheduled] });
                     } else {
                         queues[lane].push(scheduled);
                     }
@@ -1079,15 +1081,19 @@ async function mainLoop(
 
             // Fold each application's accepted GAME quests into the game queue. A lone quest is
             // pushed unchanged, so distinct apps behave exactly as before; two or more become one
-            // unit that runs its members together under the shared process the Patcher refcounts.
-            for (const members of gameGroups.values()) {
+            // unit that opens a single shared session, runs its members off it, and closes it once
+            // they have all settled, so one process serves the group start to finish (issue #96).
+            for (const [appKey, { name, members }] of gameGroups) {
                 if (members.length === 1) {
                     queues.game.push(members[0]);
                     continue;
                 }
                 queues.game.push({
                     isActive: () => members.some(m => m.isActive()),
-                    run: async () => { await Promise.allSettled(members.map(m => m.run())); },
+                    run: () => runSharedGameSession(members, {
+                        open: () => runTasks.openGameSession(appKey, name),
+                        close: () => runTasks.closeGameSession(appKey),
+                    }),
                 });
             }
 

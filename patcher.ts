@@ -24,7 +24,6 @@ import { getUserSettingLazy } from "@api/UserSettings";
 import { Logger } from "@utils/Logger";
 
 import { COMPANION_EVENT_CODES, emitCompanionEvent } from "./companionEvents";
-import { GameSessionRefs } from "./gameSession";
 import type { FakeGame, Stores } from "./types";
 import { debug } from "./util";
 
@@ -90,11 +89,11 @@ const PATCHED_METHODS = [
 ] as const;
 
 export class Patcher {
+    // Each add materialises one process and each remove drops that same object; keeping two
+    // alive for one application is the caller's business, not this one's. Accepted quests of a
+    // single game run off one shared session that adds and removes once (issue #96, gameSession.ts),
+    // so this stays the plain spoof it was before that.
     private games: FakeGame[] = [];
-    // One process per application. Sibling quests of the same game (issue #96) each add and
-    // remove their own FakeGame, but only the first add materialises a process and only the
-    // last remove tears it down. Keyed by application id because the siblings pass distinct pids.
-    private readonly refs = new GameSessionRefs();
     private real: Record<string, any> = {};
     private active = false;
     /** Read live, since the user can flip the setting while the engine is running. */
@@ -191,8 +190,6 @@ export class Patcher {
     }
 
     add(g: FakeGame): void {
-        if (!this.refs.acquire(String(g.id))) return; // a sibling already spoofed this app
-
         this.games.push(g);
         this.toggle(true);
         this.syncPresenceSuppression();
@@ -201,14 +198,14 @@ export class Patcher {
     }
 
     remove(g: FakeGame): void {
-        if (!this.refs.release(String(g.id))) return; // a sibling still needs it, or never held
-
-        // Siblings passed distinct pids, so drop the one process this app did materialise, by id.
-        const idx = this.games.findIndex(x => String(x.id) === String(g.id));
+        // Drop the exact object that was added, by identity. Removing by app id would let a
+        // group's shared game and a lone one for the same app delete each other, and nothing
+        // runs both at once anyway.
+        const idx = this.games.indexOf(g);
         if (idx === -1) return;
-        const [materialised] = this.games.splice(idx, 1);
+        this.games.splice(idx, 1);
 
-        this.dispatch([], [materialised]);
+        this.dispatch([], [g]);
         this.syncPresenceSuppression();
         if (!this.games.length) {
             this.toggle(false);
@@ -258,7 +255,6 @@ export class Patcher {
 
     clean(): void {
         this.games = [];
-        this.refs.clear();
         this.toggle(false);
         // games emptied first, so this always restores showCurrentGame
         this.syncPresenceSuppression();

@@ -131,6 +131,8 @@ export class TaskRunner {
     private lifecycle?: TaskLifecycle;
     private streamReal: any;
     private streamSpoofs = new Map<string, { id: string | number; pid: number; sourceName: string; }>();
+    /** Application id -> the one shared session its accepted quests run off (issue #96). */
+    private gameSessions = new Map<string, { data: any; game: FakeGame; }>();
 
     constructor(
         stores: Stores,
@@ -309,6 +311,49 @@ export class TaskRunner {
         }
     }
 
+    private makeFakeGame(data: any): FakeGame {
+        const pid = rnd(2500, 12500) * 4;
+        return {
+            id: data.id,
+            name: data.name,
+            icon: data.icon,
+            pid,
+            pidPath: [pid],
+            processName: data.name,
+            start: Date.now(),
+            exeName: data.exeName,
+            exePath: data.exePath,
+            cmdLine: data.cmdLine,
+            executables: [{ os: "win32", name: data.exeName, is_launcher: false }],
+            windowHandle: 0,
+            fullscreenType: 0,
+            overlay: true,
+            sandboxed: false,
+            hidden: false,
+            isLauncher: false,
+        };
+    }
+
+    /**
+     * Open the one shared process an application's accepted quests run off (issue #96). The
+     * metadata is fetched and the process materialised once here, so the group's members neither
+     * re-request it nor spawn a process each. The group closes it once every member has settled.
+     */
+    async openGameSession(appId: string, appName: string): Promise<void> {
+        const data = await this.fetchGameData(appId, appName);
+        const game = this.makeFakeGame(data);
+        this.gameSessions.set(String(appId), { data, game });
+        this.patcher.add(game);
+    }
+
+    /** Drop the application's shared process once its group has fully settled. */
+    closeGameSession(appId: string): void {
+        const session = this.gameSessions.get(String(appId));
+        if (!session) return;
+        this.gameSessions.delete(String(appId));
+        this.patcher.remove(session.game);
+    }
+
     async claimReward(questId: string): Promise<any> {
         return this.stores.API.post({
             url: `/quests/${questId}/claim-reward`,
@@ -402,32 +447,17 @@ export class TaskRunner {
     async generic(q: Quest, t: TaskInfo, type: TaskType, fallbackKey: string): Promise<void> {
         if (!this.isTaskActive(t)) return;
         const key = t.keyName || fallbackKey;
-        const gameData = await this.fetchGameData(t.appId, t.name);
+        // A GAME quest whose app has an open shared session is a group member (issue #96): it
+        // reads the group's game data instead of fetching its own and leaves the one process to
+        // the group. A lone quest and every stream still fetch and spoof for themselves.
+        const session = type === "GAME" ? this.gameSessions.get(String(t.appId)) : undefined;
+        const gameData = session?.data ?? await this.fetchGameData(t.appId, t.name);
         if (!this.isTaskActive(t)) return;
 
         return new Promise<void>(resolve => {
             if (!this.isTaskActive(t)) { resolve(); return; }
 
-            const pid = rnd(2500, 12500) * 4;
-            const game: FakeGame = {
-                id: gameData.id,
-                name: gameData.name,
-                icon: gameData.icon,
-                pid,
-                pidPath: [pid],
-                processName: gameData.name,
-                start: Date.now(),
-                exeName: gameData.exeName,
-                exePath: gameData.exePath,
-                cmdLine: gameData.cmdLine,
-                executables: [{ os: "win32", name: gameData.exeName, is_launcher: false }],
-                windowHandle: 0,
-                fullscreenType: 0,
-                overlay: true,
-                sandboxed: false,
-                hidden: false,
-                isLauncher: false,
-            };
+            const game = this.makeFakeGame(gameData);
 
             let cleanupHook: () => void = () => { };
             let cleaned = false;
@@ -473,7 +503,7 @@ export class TaskRunner {
             // ourselves instead of leaving a fake process/stream behind with no owner.
             if (type === "STREAM") {
                 if (this.stores.StreamStore) {
-                    this.streamSpoofs.set(q.id, { id: gameData.id, pid, sourceName: gameData.name });
+                    this.streamSpoofs.set(q.id, { id: gameData.id, pid: game.pid, sourceName: gameData.name });
                     this.syncStreamSpoof();
                 }
                 cleanupHook = () => {
@@ -481,10 +511,12 @@ export class TaskRunner {
                     this.streamSpoofs.delete(q.id);
                     this.syncStreamSpoof();
                 };
-            } else {
+            } else if (!session) {
                 this.patcher.add(game);
                 cleanupHook = () => this.patcher.remove(game);
             }
+            // else: a group member, whose shared session owns the one process; cleanupHook stays
+            // a no-op and the member only watches its own heartbeat below.
 
             if (!this.addCleanup(t, abort)) {
                 abort();
