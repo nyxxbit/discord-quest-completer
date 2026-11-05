@@ -341,6 +341,10 @@ export class TaskRunner {
      */
     async openGameSession(appId: string, appName: string): Promise<void> {
         const data = await this.fetchGameData(appId, appName);
+        // A STOP while the fetch was in flight has already flushed the patcher, so a resolved
+        // continuation would reinstall a process after teardown. generic() makes the same
+        // post-await liveness check for the per-quest path; the shared session needs it too.
+        if (!this.runtime.running) return;
         const game = this.makeFakeGame(data);
         this.gameSessions.set(String(appId), { data, game });
         this.patcher.add(game);

@@ -1628,6 +1628,10 @@
         // has settled.
         async openGameSession(appId, appName) {
             const data = await this.fetchGameData(appId, appName);
+            // A STOP while the fetch was in flight has already flushed the patcher, so a resolved
+            // continuation would reinstall a process after teardown. generic() makes the same
+            // post-await liveness check for the per-quest path; the shared session needs it too.
+            if (!RUNTIME.running) return;
             const game = this.makeFakeGame(data);
             this.gameSessions.set(String(appId), { data, game });
             Patcher.add(game);
