@@ -1258,6 +1258,10 @@
 
     const Patcher = {
         games: [], real: {}, active: false,
+        // One process per application. Sibling quests of the same game (issue #96) each add and
+        // remove their own fake game, but only the first add materialises a process and only the
+        // last remove tears it down. Keyed by application id: siblings pass distinct pids.
+        refs: new Map(),
         savedShowCurrentGame: null,  // value before we forced it off; null = not suppressed
         _unhide: null,               // pagehide listener, detached once the setting is restored
 
@@ -1354,7 +1358,11 @@
         },
 
         add(g) {
-            if (this.games.some(x => x.pid === g.pid)) return;
+            const id = String(g.id);
+            const held = this.refs.get(id) ?? 0;
+            this.refs.set(id, held + 1);
+            if (held > 0) return;  // a sibling already spoofed this app; share its process
+
             this.games.push(g);
             this.toggle(true);
             this.syncPresenceSuppression();
@@ -1363,11 +1371,18 @@
         },
 
         remove(g) {
-            const before = this.games.length;
-            this.games = this.games.filter(x => x.pid !== g.pid);
-            if (this.games.length === before) return;
+            const id = String(g.id);
+            const held = this.refs.get(id) ?? 0;
+            if (held === 0) return;
+            if (held > 1) { this.refs.set(id, held - 1); return; }  // a sibling still needs it
+            this.refs.delete(id);
 
-            this.dispatch([], [g]);
+            // Siblings passed distinct pids, so drop the one process this app materialised, by id.
+            const idx = this.games.findIndex(x => String(x.id) === id);
+            if (idx === -1) return;
+            const [materialised] = this.games.splice(idx, 1);
+
+            this.dispatch([], [materialised]);
             this.syncPresenceSuppression();
             if (!this.games.length) {
                 this.toggle(false);
@@ -1414,6 +1429,7 @@
 
         clean() {
             this.games = [];
+            this.refs.clear();
             this.toggle(false);
             // games emptied first, so this always restores showCurrentGame
             this.syncPresenceSuppression();
@@ -2763,6 +2779,10 @@
                 }
 
                 const queues = { video: [], game: [] };
+                // Already-accepted GAME quests of one application run under a single shared game
+                // session (issue #96): gathered here by appId and folded into one queue unit
+                // after the scan, so one fake process serves them all. Mirrors orion.ts.
+                const gameGroups = new Map();
                 // issue #95: GAME quests that are the same app all progress while one of them
                 // runs, so the cycle below says so instead of it looking like the limit was
                 // bypassed. Mirrors summarizeSharedGameQuests in the plugin's questConfig.ts.
@@ -2848,13 +2868,30 @@
                             return runner(q, tInfo, q.userStatus);
                         };
 
+                        // An accepted GAME quest joins its application's group instead of the
+                        // queue; groups are folded into one unit each after the scan. Everything
+                        // else (incl. not-yet-accepted quests) keeps the per-quest path.
                         if (type === "WATCH_VIDEO") queues.video.push(taskFunc);
+                        else if (type === "GAME" && q.userStatus?.enrolledAt && appId) {
+                            const appKey = String(appId);
+                            const members = gameGroups.get(appKey);
+                            if (members) members.push(taskFunc);
+                            else gameGroups.set(appKey, [taskFunc]);
+                        }
                         else queues.game.push(taskFunc);
                         scheduledInfo.push({ appId: tInfo.appId, name: tInfo.name, type });
                     } catch (e) {
                         Logger.log(`[Quest] Error processing ${q.id}: ${e.message}`, 'err');
                     }
                 });
+
+                // Fold each application's accepted GAME quests into the game queue. A lone quest
+                // is pushed unchanged (distinct apps behave as before); two or more become one
+                // unit that runs its members together under the Patcher's shared process.
+                for (const members of gameGroups.values()) {
+                    if (members.length === 1) queues.game.push(members[0]);
+                    else queues.game.push(() => Promise.allSettled(members.map(m => m())));
+                }
 
                 const totalTasks = queues.video.length + queues.game.length;
 

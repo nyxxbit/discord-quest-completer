@@ -24,6 +24,7 @@ import { getUserSettingLazy } from "@api/UserSettings";
 import { Logger } from "@utils/Logger";
 
 import { COMPANION_EVENT_CODES, emitCompanionEvent } from "./companionEvents";
+import { GameSessionRefs } from "./gameSession";
 import type { FakeGame, Stores } from "./types";
 import { debug } from "./util";
 
@@ -90,6 +91,10 @@ const PATCHED_METHODS = [
 
 export class Patcher {
     private games: FakeGame[] = [];
+    // One process per application. Sibling quests of the same game (issue #96) each add and
+    // remove their own FakeGame, but only the first add materialises a process and only the
+    // last remove tears it down. Keyed by application id because the siblings pass distinct pids.
+    private readonly refs = new GameSessionRefs();
     private real: Record<string, any> = {};
     private active = false;
     /** Read live, since the user can flip the setting while the engine is running. */
@@ -186,7 +191,8 @@ export class Patcher {
     }
 
     add(g: FakeGame): void {
-        if (this.games.some(x => x.pid === g.pid)) return;
+        if (!this.refs.acquire(String(g.id))) return; // a sibling already spoofed this app
+
         this.games.push(g);
         this.toggle(true);
         this.syncPresenceSuppression();
@@ -195,11 +201,14 @@ export class Patcher {
     }
 
     remove(g: FakeGame): void {
-        const before = this.games.length;
-        this.games = this.games.filter(x => x.pid !== g.pid);
-        if (this.games.length === before) return;
+        if (!this.refs.release(String(g.id))) return; // a sibling still needs it, or never held
 
-        this.dispatch([], [g]);
+        // Siblings passed distinct pids, so drop the one process this app did materialise, by id.
+        const idx = this.games.findIndex(x => String(x.id) === String(g.id));
+        if (idx === -1) return;
+        const [materialised] = this.games.splice(idx, 1);
+
+        this.dispatch([], [materialised]);
         this.syncPresenceSuppression();
         if (!this.games.length) {
             this.toggle(false);
@@ -249,6 +258,7 @@ export class Patcher {
 
     clean(): void {
         this.games = [];
+        this.refs.clear();
         this.toggle(false);
         // games emptied first, so this always restores showCurrentGame
         this.syncPresenceSuppression();

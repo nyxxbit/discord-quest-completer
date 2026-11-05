@@ -831,6 +831,10 @@ async function mainLoop(
             }
 
             const queues: { video: ScheduledTask[]; game: ScheduledTask[]; } = { video: [], game: [] };
+            // Already-accepted GAME quests of one application run under a single shared game
+            // session (issue #96): gathered here by appId and folded into one scheduler unit
+            // below, so one fake process serves them all and gameConcurrency counts applications.
+            const gameGroups = new Map<string, ScheduledTask[]>();
             // Collected alongside the queues so the cycle can point out quests that are the same
             // game and will finish together (issue #95). Kept separate from ScheduledTask, which
             // deliberately carries only run/isActive.
@@ -1055,11 +1059,36 @@ async function mainLoop(
                         },
                     };
 
-                    queues[schedulerLaneForTaskType(type)].push(scheduled);
+                    // An accepted GAME quest joins its application's group instead of the queue;
+                    // the group is materialised into one scheduler unit after the scan. Not-yet-
+                    // accepted quests keep the per-quest path so JIT enrollment is unchanged.
+                    const lane = schedulerLaneForTaskType(type);
+                    if (type === "GAME" && q.userStatus?.enrolledAt && t.appId) {
+                        const appKey = String(t.appId);
+                        const members = gameGroups.get(appKey);
+                        if (members) members.push(scheduled);
+                        else gameGroups.set(appKey, [scheduled]);
+                    } else {
+                        queues[lane].push(scheduled);
+                    }
                     scheduledInfo.push({ appId: t.appId, name: t.name, type });
                 } catch (e: any) {
                     if (isRunActive(runId, runRuntime)) logger.error(`[Quest] Error processing ${q.id}: ${e?.message}`);
                 }
+            }
+
+            // Fold each application's accepted GAME quests into the game queue. A lone quest is
+            // pushed unchanged, so distinct apps behave exactly as before; two or more become one
+            // unit that runs its members together under the shared process the Patcher refcounts.
+            for (const members of gameGroups.values()) {
+                if (members.length === 1) {
+                    queues.game.push(members[0]);
+                    continue;
+                }
+                queues.game.push({
+                    isActive: () => members.some(m => m.isActive()),
+                    run: async () => { await Promise.allSettled(members.map(m => m.run())); },
+                });
             }
 
             const total = queues.video.length + queues.game.length;
