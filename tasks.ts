@@ -16,6 +16,7 @@ import {
     emitCompanionEvent,
     type CompanionEventFailure,
 } from "./companionEvents";
+import { discordSaysResponseError } from "./discordSays";
 import { HeartbeatWatchdog } from "./heartbeatWatchdog";
 import { cleanupCreatedOAuthGrants } from "./oauthLifecycle";
 import type { Patcher } from "./patcher";
@@ -841,9 +842,7 @@ export class TaskRunner {
             const dsAuthRes = await Native.discordsaysAuthorize({ appId, questId: q.id, authCode, referrer });
             if (!this.isTaskActive(t)) return { ok: false, reason };
             if (!dsAuthRes.ok) {
-                const error: any = new Error(`discordsays authorize ${dsAuthRes.status}`);
-                error.status = dsAuthRes.status;
-                throw error;
+                throw discordSaysResponseError("discordsays authorize", dsAuthRes);
             }
             let dsToken: string | undefined;
             try { dsToken = (JSON.parse(dsAuthRes.body) as { token?: string }).token; }
@@ -854,9 +853,7 @@ export class TaskRunner {
             const progRes = await Native.discordsaysProgress({ appId, questId: q.id, token: dsToken, target: t.target, referrer });
             if (!this.isTaskActive(t)) return { ok: false, reason };
             if (!progRes.ok) {
-                const error: any = new Error(`discordsays progress ${progRes.status}`);
-                error.status = progRes.status;
-                throw error;
+                throw discordSaysResponseError("discordsays progress", progRes);
             }
 
             logger.info(`[Bypass] Success. "${t.name}" completed via Discord Says.`);

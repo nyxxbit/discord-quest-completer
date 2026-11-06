@@ -11,6 +11,8 @@
 
 import { IpcMainInvokeEvent } from "electron";
 
+import { discordSaysProgressBody, type DiscordSaysResponse } from "./discordSays";
+
 // This is the real trust boundary: the renderer could be compromised and these handlers run
 // in the privileged, CSP-free main process. Validate every renderer-supplied value that shapes
 // the request, not just appId: appId and questId must be numeric, and the referrer must be
@@ -28,12 +30,6 @@ function validParams(appId: string, questId: string, referrer: string): boolean 
 }
 
 const rejected = (): DiscordSaysResponse => ({ ok: false, status: 0, body: JSON.stringify({ error: "invalid request params" }) });
-
-export interface DiscordSaysResponse {
-    ok: boolean;
-    status: number;
-    body: string;
-}
 
 async function discordsaysFetch(url: string, headers: Record<string, string>, body: string): Promise<DiscordSaysResponse> {
     try {
@@ -60,6 +56,6 @@ export async function discordsaysProgress(_: IpcMainInvokeEvent, opts: { appId: 
     return discordsaysFetch(
         `https://${opts.appId}.discordsays.com/.proxy/acf/quest/progress`,
         { "Content-Type": "application/json", "X-Auth-Token": opts.token, "X-Discord-Quest-ID": opts.questId, Referer: opts.referrer },
-        JSON.stringify({ progress: opts.target })
+        discordSaysProgressBody(opts.target, opts.questId)
     );
 }

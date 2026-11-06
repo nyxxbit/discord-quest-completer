@@ -1439,6 +1439,11 @@
         return parts.join(', ') || 'no detail';
     };
 
+    const parseDiscordSaysErrorBody = body => {
+        if (typeof body !== 'string') return body;
+        try { return JSON.parse(body); } catch (_) { return body; }
+    };
+
     /* ── task handlers ────────────────────────────────────────────
        Each quest type (VIDEO, GAME, STREAM, ACTIVITY) has its own
        handler. GAME/STREAM share a generic() path that patches stores
@@ -1906,7 +1911,7 @@
         //   1) /oauth2/authorize the quest's app (returns code in location URL)
         //   2) /applications/{appId}/proxy-tickets (returns proxy ticket)
         //   3) POST {appId}.discordsays.com/.proxy/acf/authorize {code} → DS token
-        //   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}
+        //   4) POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target, quest_id: questId}
         //   5) /oauth2/tokens + DELETE to clean up the grant
         //
         // Steps 3-4 are blocked by Discord's renderer CSP (connect-src doesn't
@@ -2051,11 +2056,14 @@
                             if (!RUNTIME.running) throw new Error('Shutdown');
                             if (r && (r.status || r.statusCode)) {
                                 const status = r.status ?? r.statusCode;
-                                return { ok: status >= 200 && status < 300, status, body: r.body ?? r.responseText ?? '' };
+                                const body = r.body ?? r.responseText ?? '';
+                                if (status < 200 || status >= 300) throw { status, body };
+                                return { ok: true, status, body };
                             }
                         }
                     } catch (e) {
                         if (!RUNTIME.running) throw e;
+                        if (e?.status) throw e;
                     }
                 }
             }
@@ -2170,7 +2178,7 @@
                 await Tasks._bypassPost(
                     `https://${appId}.discordsays.com/.proxy/acf/quest/progress`,
                     { 'Content-Type': 'application/json', 'X-Auth-Token': dsToken, 'X-Discord-Quest-ID': q.id, 'Referer': referrer },
-                    JSON.stringify({ progress: t.target })
+                    JSON.stringify({ progress: t.target, quest_id: q.id })
                 );
                 if (!RUNTIME.running) return { ok: false, reason };
 
@@ -2185,8 +2193,10 @@
                     Logger.log(`[Bypass] Discord's CSP blocks the script from reaching discordsays.com. Use the Vencord plugin port for the auto-bypass, since a userscript cannot bypass CSP. Skipping "${t.name}".`, 'warn');
                     return { ok: false, reason };
                 }
-                // Discord's API client rejects with {status, body:{code,message}}, not Error, so stringify properly
-                const code = e?.body?.code;
+                // _bypassPost transports return response bodies as strings. Parse JSON here so
+                // the backend's actual code/message survives instead of collapsing to HTTP status.
+                const errorBody = parseDiscordSaysErrorBody(e?.body);
+                const code = errorBody?.code ?? e?.code;
                 // 50165 = Cannot launch Age-Gated Activity: age-gated or delisted
                 if (code === 50165) {
                     reason = 'the activity is age-gated or delisted, so Discord refuses the proxy ticket on this account';
@@ -2196,8 +2206,10 @@
                 const parts = [];
                 if (e?.status) parts.push(`HTTP ${e.status}`);
                 if (code) parts.push(`code ${code}`);
-                if (e?.body?.message) parts.push(e.body.message);
+                if (errorBody?.message) parts.push(String(errorBody.message));
+                else if (errorBody?.error) parts.push(String(errorBody.error));
                 else if (e?.message) parts.push(e.message);
+                else if (typeof errorBody === 'string' && errorBody.trim()) parts.push(errorBody.slice(0, 200));
                 else if (typeof e === 'string') parts.push(e);
                 else if (e) { try { parts.push(JSON.stringify(e).slice(0, 200)); } catch { parts.push(String(e)); } }
                 reason = `the Discord Says bypass failed (${parts.join(', ') || 'unknown error'})`;
