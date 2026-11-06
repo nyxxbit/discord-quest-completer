@@ -71,6 +71,7 @@ writeFileSync(modPath, [
     `    orbReward: ${body("orbReward")},`,
     `    recordOutcome: ${body("recordOutcome")},`,
     `    summarizeRun: ${body("summarizeRun")},`,
+    `    parseDiscordSaysErrorBody: ${body("parseDiscordSaysErrorBody")},`,
     "};",
 ].join("\n"));
 
@@ -79,10 +80,27 @@ const us = createRequire(import.meta.url)(modPath) as {
     orbReward: (config: any) => { orbs: number; premium: number; } | null;
     recordOutcome: (m: Map<string, string>, id: string, o: string) => void;
     summarizeRun: (m: Map<string, string>) => { finished: number; blocked: number; failed: number; line: string; playDone: boolean; };
+    parseDiscordSaysErrorBody: (body: unknown) => any;
 };
 
 test("every pure helper we rely on still extracts from index.js", () => {
-    for (const fn of [us.notExpiredWith, us.orbReward, us.recordOutcome, us.summarizeRun]) assert.equal(typeof fn, "function");
+    for (const fn of [us.notExpiredWith, us.orbReward, us.recordOutcome, us.summarizeRun, us.parseDiscordSaysErrorBody]) assert.equal(typeof fn, "function");
+});
+
+test("userscript Discord Says wire contract carries quest_id and preserves JSON errors", () => {
+    assert.ok(
+        SRC.includes("JSON.stringify({ progress: t.target, quest_id: q.id })"),
+        "userscript progress payload lost quest_id",
+    );
+
+    const parsed = us.parseDiscordSaysErrorBody(
+        '{"status":"error","message":"quest_id missing in request body"}',
+    );
+    assert.deepEqual(parsed, { status: "error", message: "quest_id missing in request body" });
+    assert.equal(us.parseDiscordSaysErrorBody("not-json"), "not-json");
+
+    const alreadyParsed = { code: 50165, message: "age gated" };
+    assert.equal(us.parseDiscordSaysErrorBody(alreadyParsed), alreadyParsed);
 });
 
 // ---- orbReward <-> questOrbReward -------------------------------------------------------------

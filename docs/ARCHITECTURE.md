@@ -174,9 +174,9 @@ Runs only after the heartbeat path is rejected, and only with the user's consent
 2. `POST /applications/{appId}/proxy-tickets` → a proxy ticket.
 3. Build the `{appId}.discordsays.com` referrer carrying that ticket.
 4. `POST {appId}.discordsays.com/.proxy/acf/authorize {code}` → a Discord Says token.
-5. `POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target}`.
+5. `POST {appId}.discordsays.com/.proxy/acf/quest/progress {progress: target, quest_id: questId}`.
 
-Trust model: Discord delegates progress validation to the activity backend, so a forged progress POST from an authorized session is accepted. Steps 4-5 are the ones blocked by the renderer CSP and routed through a transport (below).
+Trust model: Discord delegates progress validation to the activity backend, so a forged progress POST from an authorized session is accepted. Steps 4-5 are the ones blocked by the renderer CSP and routed through a transport (below). The progress endpoint currently requires the quest id both in `X-Discord-Quest-ID` and as `quest_id` in the JSON body; #98 caught the backend rejecting the older body-only-progress shape with HTTP 400. Non-2xx Discord Says response bodies are parsed before Orion formats the failure so backend contract errors remain visible in status and companion diagnostics.
 
 **Grant lifecycle.** Before step 1, Orion snapshots the app's existing OAuth grants (`GET /oauth2/tokens`). The snapshot is a **precondition**: if it fails, the bypass aborts before authorizing, so it never creates a grant it can't later identify. A `finally` block revokes only grants for that app that were absent from the snapshot, whether the flow succeeded or threw, so a failed bypass never leaves the app authorized and an authorization that existed before the run is never touched (a manual authorization made in parallel *during* the run is the one edge it can't distinguish).
 
