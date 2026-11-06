@@ -93,6 +93,11 @@ test("userscript Discord Says wire contract carries quest_id and preserves JSON 
         "userscript progress payload lost quest_id",
     );
 
+    assert.ok(
+        SRC.includes("if (status < 200 || status >= 300) throw { status, body };"),
+        "DiscordNative transport stopped propagating non-2xx responses",
+    );
+
     const parsed = us.parseDiscordSaysErrorBody(
         '{"status":"error","message":"quest_id missing in request body"}',
     );

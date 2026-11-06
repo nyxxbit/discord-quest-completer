@@ -2056,11 +2056,14 @@
                             if (!RUNTIME.running) throw new Error('Shutdown');
                             if (r && (r.status || r.statusCode)) {
                                 const status = r.status ?? r.statusCode;
-                                return { ok: status >= 200 && status < 300, status, body: r.body ?? r.responseText ?? '' };
+                                const body = r.body ?? r.responseText ?? '';
+                                if (status < 200 || status >= 300) throw { status, body };
+                                return { ok: true, status, body };
                             }
                         }
                     } catch (e) {
                         if (!RUNTIME.running) throw e;
+                        if (e?.status) throw e;
                     }
                 }
             }
