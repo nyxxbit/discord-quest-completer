@@ -28,6 +28,7 @@
 param(
     [string] $BundleDist,
     [string] $BundleSource,
+    [string] $VencordRef = '383409e6a6ec9008ee8a7496500f1e75f17824d1',
     [switch] $SkipBundle
 )
 
@@ -39,6 +40,8 @@ function Info($m) { Write-Host $m -ForegroundColor Cyan }
 function Good($m) { Write-Host "  $m" -ForegroundColor Green }
 function Die($m) { Write-Host ""; Write-Host "  ERROR: $m" -ForegroundColor Red; exit 1 }
 
+. (Join-Path $PSScriptRoot 'release-helpers.ps1')
+
 # ---- 1. version, and every place that has to agree with it -----------------------
 $indexJs = Join-Path $Repo 'index.js'
 $m = [regex]::Match((Get-Content $indexJs -Raw), 'VERSION:\s*"(v[0-9]+\.[0-9]+\.[0-9]+)"')
@@ -49,13 +52,13 @@ Info "Version from index.js: $Version"
 $checks = @(
     # The README carries the version in its badge only. It used to repeat it in the headline
     # too, until that line went with the rewrite that pulled the marketing voice out.
-    @{ File = 'README.md';                                Pattern = "badge/$Version-5865F2" }
-    @{ File = 'docs/VENCORD-PLUGIN.md';                   Pattern = "in sync with userscript $Version" }
-    @{ File = 'docs/ARCHITECTURE.md';                     Pattern = "Last reviewed against .index\.js. \*\*$Version\*\*" }
+    @{ File = 'README.md'; Pattern = "badge/$Version-5865F2" }
+    @{ File = 'docs/VENCORD-PLUGIN.md'; Pattern = "in sync with userscript $Version" }
+    @{ File = 'docs/ARCHITECTURE.md'; Pattern = "Last reviewed against .index\.js. \*\*$Version\*\*" }
     @{ File = 'tools/orion-devbuild-installer/README.txt'; Pattern = "Version: $Version" }
     # The plugin carries its own version since v4.10.7. Before that a plugin user could not say
     # which build a bug report came from, and neither could anyone triaging it (issue #66).
-    @{ File = 'index.tsx';                                Pattern = "PLUGIN_VERSION = ""$Version""" }
+    @{ File = 'index.tsx'; Pattern = "PLUGIN_VERSION = ""$Version""" }
 )
 $drift = @()
 foreach ($c in $checks) {
@@ -85,6 +88,56 @@ $staged = (Get-ChildItem $stage -File).Count
 if ($staged -lt 9) { Die "only $staged plugin files staged, expected the full set" }
 Good "$staged files staged"
 
+# ---- 2.5. Build Vencord from a pinned, tested revision ---------------------------
+if (-not $SkipBundle -and -not $BundleDist) {
+    if ($VencordRef -like '<*') { Die "set -VencordRef to a tested Vencord commit SHA" }
+
+    # Vencord needs Node 22+
+    $nodeMajor = [int]((node -v).TrimStart('v').Split('.')[0])
+    if ($nodeMajor -lt 22) { Die "Node 22+ required, found $(node -v)" }
+
+    $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
+    $buildDir = Join-Path $Repo '_vencord-build'
+    if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
+
+    Info "Cloning Vencord at $VencordRef ..."
+    git clone https://github.com/Vendicated/Vencord $buildDir
+    if ($LASTEXITCODE -ne 0) { Die "Failed to clone Vencord" }
+    git -C $buildDir checkout $VencordRef
+    if ($LASTEXITCODE -ne 0) { Die "Failed to checkout $VencordRef" }
+
+    Push-Location $buildDir
+    try {
+        $packageJson = Get-Content (Join-Path $buildDir 'package.json') -Raw | ConvertFrom-Json
+        try { $pnpm = Get-PnpmInvocation $packageJson.packageManager }
+        catch { Die $_.Exception.Message }
+        $pnpmArgs = @($pnpm | Select-Object -Skip 1)
+
+        Info "Installing dependencies..."
+        & $pnpm[0] @pnpmArgs install --frozen-lockfile
+        if ($LASTEXITCODE -ne 0) { Die "pnpm install failed" }
+
+        # clean provenance: only orionQuests may exist in src\userplugins
+        $userpluginsRoot = Join-Path $buildDir 'src\userplugins'
+        if (Test-Path $userpluginsRoot) { Remove-Item $userpluginsRoot -Recurse -Force }
+        $pluginDir = Join-Path $userpluginsRoot 'orionQuests'
+        New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+
+        # same root *.ts / *.tsx staging as step 2, no hardcoded list
+        Get-ChildItem $Repo -File | Where-Object { $_.Extension -in '.ts', '.tsx' } |
+        ForEach-Object { Copy-Item $_.FullName $pluginDir }
+
+        Info "Building Vencord (standalone, updater disabled)..."
+        & $pnpm[0] @pnpmArgs build --standalone --disable-updater
+        if ($LASTEXITCODE -ne 0) { Die "Build failed" }
+    }
+    finally { Pop-Location }
+
+    $BundleDist = Join-Path $buildDir 'dist'
+    $BundleSource = $buildDir
+    Good "Build complete. Using $BundleDist"
+}
+
 # ---- 3. the Tier 1 bundle must be a clean standalone, updater-disabled build -----
 if (-not $SkipBundle) {
     if ([string]::IsNullOrWhiteSpace($BundleDist)) {
@@ -97,9 +150,14 @@ if (-not $SkipBundle) {
     if ($BundleSource) {
         try { $sourceRoot = (Resolve-Path -LiteralPath $BundleSource -ErrorAction Stop).Path }
         catch { Die "BundleSource '$BundleSource' does not exist" }
-    } else {
+    }
+    else {
         $sourceRoot = Split-Path -Parent $bundleDistFull
     }
+
+    try { Assert-VencordRevision $sourceRoot $VencordRef }
+    catch { Die $_.Exception.Message }
+    Good "bundle source HEAD matches pinned Vencord $($VencordRef.Substring(0,7))"
 
     $expectedDist = [IO.Path]::GetFullPath((Join-Path $sourceRoot 'dist')).TrimEnd('\', '/')
     $actualDist = [IO.Path]::GetFullPath($bundleDistFull).TrimEnd('\', '/')
@@ -135,10 +193,10 @@ if (-not $SkipBundle) {
     $extraUserPluginSources = @()
     if (Test-Path -LiteralPath $userplugins -PathType Container) {
         $extraUserPluginSources = @(Get-ChildItem -LiteralPath $userplugins -Force | Where-Object {
-            if ($_.Name -eq 'orionQuests') { $false }
-            elseif (-not $_.PSIsContainer -and $_.Name -eq 'index.ts') { $false }
-            else { $true }
-        })
+                if ($_.Name -eq 'orionQuests') { $false }
+                elseif (-not $_.PSIsContainer -and $_.Name -eq 'index.ts') { $false }
+                else { $true }
+            })
     }
     if ($extraUserPluginSources.Count -gt 0) {
         $names = $extraUserPluginSources.Name -join ', '
@@ -171,8 +229,14 @@ if (-not $SkipBundle) {
     # the banner is a few `//` lines and the order isn't fixed (Standalone, Platform,
     # Updater Disabled), so read past all of them rather than assuming a line count
     $banner = (Get-Content (Join-Path $dist 'patcher.js') -TotalCount 10) -join "`n"
-    if ($banner -notmatch 'Standalone:\s*true')       { Die "bundle dist is NOT a --standalone build. It would break Vencord's updater (#39)." }
+    if ($banner -notmatch 'Standalone:\s*true') { Die "bundle dist is NOT a --standalone build. It would break Vencord's updater (#39)." }
     if ($banner -notmatch 'Updater Disabled:\s*true') { Die "bundle dist is NOT --disable-updater. Its HTTP updater would revert the dist to vanilla and delete the plugin (#39)." }
+    $bm = [regex]::Match($banner, '// Vencord ([a-f0-9]+)')
+    if (-not $bm.Success) { Die "could not read the Vencord revision from the bundle dist banner." }
+    $bannerHash = $bm.Groups[1].Value
+    if (-not $VencordRef.StartsWith($bannerHash, [StringComparison]::OrdinalIgnoreCase)) {
+        Die "bundle dist was built from Vencord commit $bannerHash, but the expected tested revision is $VencordRef."
+    }
     if (-not (Select-String -Path (Join-Path $dist 'renderer.js') -Pattern 'OrionQuests' -SimpleMatch -Quiet)) { Die "the plugin is not in the bundle dist" }
     Good "bundle dist is complete, standalone + updater-disabled, contains OrionQuests, and came from the required clean source tree"
 

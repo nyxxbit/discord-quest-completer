@@ -8,6 +8,7 @@ on:
       - "tools/orion-devbuild-installer/**"
       - "tools/orion-vencord-bundle/**"
       - "tools/package-release.ps1"
+      - "tools/release-helpers.ps1"
       - "tools/tests/**"
       - ".github/workflows/installer.yml"
   pull_request:
@@ -16,6 +17,7 @@ on:
       - "tools/orion-devbuild-installer/**"
       - "tools/orion-vencord-bundle/**"
       - "tools/package-release.ps1"
+      - "tools/release-helpers.ps1"
       - "tools/tests/**"
       - ".github/workflows/installer.yml"
 
@@ -57,6 +59,12 @@ jobs:
           .\tools\tests\companion-update-regression.ps1
           .\tools\tests\companion-update-fingerprint-regression.ps1
 
+      - name: Run Pester tests with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.0.0
+          Invoke-Pester .\tests\package-release.Tests.ps1 -CI
+
       - name: Parse scripts with PowerShell 7
         shell: pwsh
         run: |
@@ -78,3 +86,9 @@ jobs:
           .\tools\tests\installer-regression.ps1
           .\tools\tests\companion-update-regression.ps1
           .\tools\tests\companion-update-fingerprint-regression.ps1
+
+      - name: Run Pester tests with Powershell 7
+        shell: pwsh
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.0.0
+          Invoke-Pester .\tests\package-release.Tests.ps1 -CI

@@ -151,11 +151,18 @@ of what you are installing is Vencord.
   in src/userplugins/orionQuests. Those plugin sources are the
   *.ts / *.tsx files at the root of our repository.
 
-  Release builders using tools/package-release.ps1 must pass a
+    Release builders using tools/package-release.ps1 must pass a
   -BundleDist that is still inside the clean Vencord source tree that
   produced it. In a shared clone, park other src/userplugins entries,
   build, and package before restoring them; a copied-out dist fails
   the provenance check because its source tree is no longer available.
+
+  The source tree must also be checked out at the exact commit pinned
+  by the release script (-VencordRef, default 383409e6). The script
+  verifies both the git HEAD of the source tree and the Vencord hash
+  embedded in dist/patcher.js against that revision. A manual
+  -BundleDist from any other commit is rejected, so a stale Vencord
+  checkout cannot be packaged by accident again.
 
 * The OrionQuests plugin itself is MIT.
   Copyright (c) 2026 Gabriel Bertolassi.
