@@ -63,7 +63,7 @@ jobs:
         shell: powershell
         run: |
           Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.0.0
-          Invoke-Pester .\tests\package-release.Tests.ps1 -CI
+          Invoke-Pester .\tools\tests\package-release.Tests.ps1 -CI
 
       - name: Parse scripts with PowerShell 7
         shell: pwsh
@@ -91,4 +91,4 @@ jobs:
         shell: pwsh
         run: |
           Install-Module Pester -Force -SkipPublisherCheck -Scope CurrentUser -MinimumVersion 5.0.0
-          Invoke-Pester .\tests\package-release.Tests.ps1 -CI
+          Invoke-Pester .\tools\tests\package-release.Tests.ps1 -CI

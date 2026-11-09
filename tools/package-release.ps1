@@ -231,12 +231,8 @@ if (-not $SkipBundle) {
     $banner = (Get-Content (Join-Path $dist 'patcher.js') -TotalCount 10) -join "`n"
     if ($banner -notmatch 'Standalone:\s*true') { Die "bundle dist is NOT a --standalone build. It would break Vencord's updater (#39)." }
     if ($banner -notmatch 'Updater Disabled:\s*true') { Die "bundle dist is NOT --disable-updater. Its HTTP updater would revert the dist to vanilla and delete the plugin (#39)." }
-    $bm = [regex]::Match($banner, '// Vencord ([a-f0-9]+)')
-    if (-not $bm.Success) { Die "could not read the Vencord revision from the bundle dist banner." }
-    $bannerHash = $bm.Groups[1].Value
-    if (-not $VencordRef.StartsWith($bannerHash, [StringComparison]::OrdinalIgnoreCase)) {
-        Die "bundle dist was built from Vencord commit $bannerHash, but the expected tested revision is $VencordRef."
-    }
+    try { Assert-VencordBannerRevision $banner $VencordRef }
+    catch { Die $_.Exception.Message }
     if (-not (Select-String -Path (Join-Path $dist 'renderer.js') -Pattern 'OrionQuests' -SimpleMatch -Quiet)) { Die "the plugin is not in the bundle dist" }
     Good "bundle dist is complete, standalone + updater-disabled, contains OrionQuests, and came from the required clean source tree"
 

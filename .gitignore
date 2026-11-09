@@ -14,4 +14,3 @@ _vencord-build/
 # playwright-mcp drops snapshots and console logs wherever it is run from
 .playwright-mcp/
 testResults.xml
-testResults.xml
