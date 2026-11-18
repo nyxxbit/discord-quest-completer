@@ -34,7 +34,7 @@ https://github.com/nyxxbit/discord-quest-completer
 
 It clones the repo into `src/userplugins/discord-quest-completer` and rebuilds. From then on the plugin shows up in the **UserPlugins** settings tab with an update button (`git fetch` + `git rebase origin/HEAD`), so new Orion releases land without touching a terminal.
 
-The install dialog will warn that this plugin **uses native modules**. That is expected and unavoidable: `native.ts` is what runs the `discordsays.com` POSTs in the Electron main process, where Discord's renderer CSP does not apply. Read it before you accept, the file is about 200 lines.
+The install dialog will warn that this plugin **uses native modules**. That is expected and unavoidable: `native.ts` is what runs the `discordsays.com` POSTs in the Electron main process, where Discord's renderer CSP does not apply. Read it before you accept, the file is under 100 lines.
 
 The clone also brings the userscript (`index.js`), `docs/`, and `tools/` along, since the installer clones the whole repo. They are inert: Vencord only ever imports `index.tsx` and `native.ts` from a plugin folder.
 
